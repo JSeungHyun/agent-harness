@@ -1,174 +1,234 @@
-# agent-harness 구현 계획
+# agent-harness 구현 계획 (A안)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 단일 세션 자율 루프가 멈추지 않으면서 증명하고 상태를 남기는 골격을, 다른 프로젝트에 이식 가능한 의존성 0 도구 모음으로 만든다.
+**Goal:** superpowers 흐름 위에 「완료의 결정론적 증거」와 「가정·교훈의 적립」만 얹는, 어느 프로젝트에나 설치되는 의존성 0 하네스를 만들고 합성 대상에서 효과를 잰다.
 
-**Architecture:** 모든 도구는 대상 저장소 루트의 `harness.json` **하나만** 읽어 경로를 얻는다 — 경로를 하드코딩하지 않으므로 대상이 이미 쓰는 파일 위치를 옮기지 않아도 된다. 공용 로직은 `lib/`(설정 로더 · 마크다운 표 파서 · 증거 판정기)에 두고 `tools/*.mjs` 는 얇은 CLI 로 둔다. 검증된 축(⑤증거 → ④상태)부터 만들고 각 단계에서 ICFR 에 실제로 걸어본다.
+**Architecture:** 대상에는 `.harness/`(도구·설정) · `.claude/rules/harness.md`(규칙) · `.claude/skills/final-gate/`(마지막 관문)가 놓인다. 모든 도구는 대상의 `.harness/harness.json` 하나만 읽고, 공용 로직은 `lib/`(설정 로더·증거 판정기·표 파서)에, `tools/*.mjs` 는 얇은 CLI 로 둔다. 효과는 `proof/run.mjs` 가 「하네스 없이 vs 있을 때」를 같은 조건에서 재어 README 에 남긴다.
 
-**Tech Stack:** Node v26.5.0 (ESM `.mjs`) · `node:test` + `node:assert/strict` · **외부 의존성 0** (`package.json` 의 `dependencies` 는 영구히 비어 있다)
+**Tech Stack:** Node 22+ (ESM `.mjs`) · `node:test` + `node:assert/strict` · **외부 의존성 0**
 
-**Spec:** `docs/2026-09-28-design.md` (커밋 `0f0e051`)
+**Spec:** `docs/2026-09-28-design.md` (개정 2026-10-02)
+
+**실행 상태 (2026-10-02):** Task 1~11 완료 — `node tools/verify.mjs` → `테스트 79 · 실패 0`, `node proof/run.mjs --claude` → 예상과 다른 행 0개 / 22행.
+⛔ 커밋 단계 10개는 사용자 요청 전이라 **보류** — 변경은 `feat/superpowers-base` 작업 트리에 있다. 태스크별 파일이 겹치지 않으므로 각 태스크의 `git add` 목록대로 나눠 커밋할 수 있다.
 
 ## Global Constraints
 
-설계서 §6 에서 그대로 옮긴다. 모든 태스크의 요구사항에 암묵적으로 포함된다.
+설계서 §7 에서 옮긴다. 모든 태스크의 요구사항에 암묵적으로 포함된다.
 
-- **의존성 0** — Node 내장 모듈만. `npm install <무엇이든>` 은 이 레포에서 금지다
-- **Node 20+** — 도구는 `.mjs` ESM 이다
-- **자동 로드되는 층을 늘리지 않는다** — 모든 도구는 호출해야 돈다. `AGENTS.md` 외에 세션마다 주입되는 파일을 만들지 않는다
-- **값이 아니라 명령을 적는다** — 한 명령으로 재생성되는 값을 파일에 저장하지 않는다
-- **검증 안 된 것을 적지 않는다** — 모든 산출물의 문서 머리에 `검증됨` 또는 `설계안` 딱지를 붙인다
-- **저장소를 하나로** — 계획서가 정본이고 스키마는 추출본이다. 같은 사실을 두 파일에 두지 않는다
-- **자동 추출하지 않는다** — LESSONS·STATE 는 사람 판단을 거쳐 기록한다. 훅으로 긁지 않는다
-- **검사는 드물게 울려야 신호다** — 늘 exit 1 이면 사람이 무시한다. 진행도는 보고하고, correctness 만 exit 1
-- **게이트는 correctness 에만 건다** — `referenceAudit` 을 `pre-push` 에 안 넣은 ICFR 의 판단을 따른다
-- **경로를 하드코딩하지 않는다** — `harness.json` 만 읽는다
-- **커밋** — `feat:`/`fix:`/`docs:` + **한글** 본문. 제목은 무엇을, 본문은 **왜**. `Co-Authored-By` 를 넣지 않는다 (`context-graph` 규약)
+- **의존성 0** — Node 내장만. `package.json` 의 `dependencies` 는 비어 있다
+- **Node 22+** — 20 은 2026-04 에 EOL 이다. `node --test` 의 glob 인자와 `readdirSync({recursive})` 를 쓴다
+- **OS 를 가리지 않는다** — 셸은 `exec` 의 플랫폼 기본(`sh`/`cmd`), 경로는 `node:path`, 줄바꿈은 `\r?\n`, CLI 판별은 `lib/config.mjs` 의 `cli()`
+- **자동 로드되는 층은 `.claude/rules/harness.md` 하나만** 더한다
+- **경로를 하드코딩하지 않는다** — 대상 경로는 `.harness/harness.json` 만 읽는다
+- **대상의 기존 파일을 옮기거나 덮어쓰지 않는다** — 규칙은 새 파일, 설정은 병합, 상태는 기존 경로
+- **검사는 드물게 울려야 신호다** — correctness(verify · 대장 무결성 · 입력 거부)만 exit 1
+- **자동 추출하지 않는다** — 교훈·가정은 판단을 거쳐 기록한다
+- **딱지** — 모든 산출물 머리에 `설계안`. 실제 프로젝트에서 값을 내기 전까지 `검증됨` 은 없다
+- **특정 프로젝트 이름을 넣지 않는다** — 픽스처는 `com.example.*` · `C:\work\app`
+- **커밋** — `feat:`/`fix:`/`docs:`/`test:` + 한글. 제목은 무엇을, 본문은 **왜**. `Co-Authored-By` 를 넣지 않는다. ⛔ push 하지 않는다
+- **계획의 마지막 태스크는 final-gate** (Task 11)
 
 ## 파일 구조
 
 | 경로 | 책임 |
 |---|---|
-| `harness.schema.json` | `harness.json` 의 규격. 사람이 읽는 문서 겸 로더의 검증 근거 |
-| `lib/config.mjs` | `harness.json` 로더. **모든 도구의 유일한 경로 원천** |
-| `lib/mdtable.mjs` | 마크다운 표 파서. `state-check` · `decision-check` · `task-extract` 공용 |
-| `lib/evidence.mjs` | 증거 판정기. `junit-xml` · `exit-code` · `file-unchanged` |
-| `checks/verify.mjs` | ⑤ 완료 관문 러너 — `harness.json` 의 `checks` 를 돌리고 **결과 파일을 읽어** 판정 |
-| `checks/regression-cases/` | 재현 케이스 보관 규약 |
-| `policy/permissions.json` | ③ 권한 정책 단일 원천 |
-| `tools/*.mjs` | 얇은 CLI 10개. 로직은 `lib/` 에 |
-| `templates/` | 대상에 복사되는 것 — `harness.json` · `AGENTS.snippet.md` · `plan.skeleton.md` · `state/*` · `skills/*` |
-| `test/*.test.mjs` | `node --test` |
-| `test/fixtures/` | 실제 ICFR 산출물에서 뜬 고정 표본 |
-| `SETUP.md` | ⭐ Claude 에게 주는 설치 지시서 |
-| `README.md` | 무엇인가 · 정직한 값 · ⛔도입하지 말아야 할 때 · 실측 |
+| `package.json` · `.gitignore` | 테스트 명령(결과 XML 을 `test-results/` 에 쓴다) |
+| `lib/config.mjs` | `.harness/harness.json` 로더 · `cli()` — 모든 도구의 유일한 경로 원천 |
+| `lib/evidence.mjs` | junit XML 판정기 — `<testcase>` 를 센다 |
+| `lib/mdtable.mjs` | 마크다운 표 칸 분리 · 대장 행 파서 · 줄바꿈 무관 해시 |
+| `tools/verify.mjs` | 선언된 검사를 돌리고 이번 실행이 쓴 결과 파일로 판정 |
+| `tools/state-check.mjs` · `decision-check.mjs` · `lesson-append.mjs` · `lesson-promote.mjs` | ④ 상태·가정·교훈 |
+| `tools/policy-apply.mjs` · `policy/settings.json` | 설치 — 설정 병합 (멱등) |
+| `templates/` | 대상에 놓이는 것 — `harness.json` · `rules/harness.md` · `skills/final-gate/` · `state/*` |
+| `SETUP.md` · `README.md` | 설치 지시서(Claude 용) · 소개와 실측 |
+| `proof/run.mjs` | 효과 입증 — README §실측 의 원천 |
+| `test/scene.mjs` · `test/*.test.mjs` · `test/fixtures/` | 임시 대상 생성기 · 테스트 · 고정 표본 |
 
-**단계 경계** — Phase 1 끝에서 ⑤증거가 ICFR 에서 돌고, Phase 2 끝에서 ④상태가 돈다. 각 Phase 끝은 멈춰도 되는 지점이다.
+**단계 경계** — Task 3 끝에서 verify 가, Task 7 끝에서 ④ 도구가, Task 9 끝에서 설치물이 완결된다. 각 경계는 멈춰도 되는 지점이다.
 
 ---
 
-# Phase 1 — ⑤ 증거 (가장 검증된 축)
-
-### Task 1: `harness.json` 규격과 설정 로더
+### Task 1: 설정 로더와 CLI 판별
 
 **Files:**
-- Create: `package.json`
-- Create: `harness.schema.json`
-- Create: `lib/config.mjs`
+- Create: `package.json` · `test/scene.mjs` · `lib/config.mjs`
+- Modify: `.gitignore`
 - Test: `test/config.test.mjs`
 
 **Interfaces:**
-- Consumes: 없음 (첫 태스크)
-- Produces: `loadConfig(root: string) → { root, map, plan, state: {current?, decisions?, lessons?}, checks: Array<{id, cmd, kind, evidence?}> }` — 모든 경로는 `root` 기준 **절대경로**로 변환되어 나온다. `EVIDENCE_KINDS: string[]` 도 export 한다.
+- Consumes: 없음
+- Produces:
+  - `loadConfig(root: string) → { root, state: { current?, currentRoot?, decisions?, lessons? }, checks: Array<{ id, cmd, kind, evidence? }> }` — 경로는 `root` 기준 절대경로, `~/` 는 홈
+  - `EVIDENCE_KINDS = ['junit-xml', 'exit-code', 'file-unchanged']`
+  - `cli(url: string, main: () => any) → Promise<void>` — 직접 실행됐을 때만 `main`, 오류는 `⛔ <메시지>` 한 줄 + exit 1
+  - 테스트 도우미 `target(harness?, files?) → dir` · `put(dir, rel, body)` · `fixture(name)` · `repoFile(rel)`
 
-- [ ] **Step 1: `package.json` 을 만든다**
+- [x] **Step 1: 패키지와 무시 목록을 만든다**
+
+`package.json`:
 
 ```json
 {
   "name": "agent-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test/" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "pretest": "node -e \"require('fs').mkdirSync('test-results',{recursive:true})\"",
+    "test": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results/junit.xml \"test/*.test.mjs\""
+  },
   "dependencies": {}
 }
 ```
 
-⛔ `dependencies` 는 영구히 비어 있다. 무언가 필요해지면 그것은 Node 내장으로 되는지 먼저 본다.
+⛔ `node --test test/` 처럼 디렉터리를 주지 않는다 — Node 22+ 는 인자를 파일·glob 으로 읽어 디렉터리를 실패한 테스트로 센다(실측). `pretest` 는 Node 가 junit 결과 디렉터리를 만들지 않아서 있다(실측: 없으면 ENOENT).
 
-- [ ] **Step 2: 실패하는 테스트를 작성한다**
+`.gitignore`:
+
+```
+node_modules/
+.DS_Store
+test-results/
+```
+
+- [x] **Step 2: 테스트 도우미를 만든다**
+
+`test/scene.mjs`:
+
+```js
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+
+// 테스트용 임시 대상 저장소. harness 객체를 주면 .harness/harness.json 을 쓴다.
+export function target(harness, files = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
+  if (harness) put(dir, '.harness/harness.json', JSON.stringify(harness));
+  for (const [rel, body] of Object.entries(files)) put(dir, rel, body);
+  return dir;
+}
+
+export function put(dir, rel, body) {
+  mkdirSync(dirname(join(dir, rel)), { recursive: true });
+  writeFileSync(join(dir, rel), body);
+}
+
+export const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+export const repoFile = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
+```
+
+- [x] **Step 3: 실패하는 테스트를 작성한다**
 
 `test/config.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../lib/config.mjs';
-
-function fixture(obj) {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
-  writeFileSync(join(dir, 'harness.json'), JSON.stringify(obj));
-  return dir;
-}
+import { loadConfig, cli } from '../lib/config.mjs';
+import { target, put } from './scene.mjs';
 
 test('경로를 대상 루트 기준 절대경로로 돌려준다', () => {
-  const dir = fixture({
-    map: 'AGENTS.md',
-    state: { current: 'docs/reference-audit.md', lessons: 'docs/lessons.md' },
-    checks: [],
-  });
+  const dir = target({ state: { decisions: 'docs/harness/decisions.md', lessons: 'docs/harness/lessons.md' }, checks: [] });
   const cfg = loadConfig(dir);
-  assert.equal(cfg.map, join(dir, 'AGENTS.md'));
-  assert.equal(cfg.state.current, join(dir, 'docs/reference-audit.md'));
-  assert.equal(cfg.state.lessons, join(dir, 'docs/lessons.md'));
+  assert.equal(cfg.state.decisions, join(dir, 'docs', 'harness', 'decisions.md'));
+  assert.equal(cfg.state.lessons, join(dir, 'docs', 'harness', 'lessons.md'));
 });
 
-test('harness.json 이 없으면 경로와 다음 행동을 알려주며 실패한다', () => {
+test('~ 로 시작하는 경로를 홈 기준으로 편다', () => {
+  const cfg = loadConfig(target({ state: { currentRoot: '~/ref' }, checks: [] }));
+  assert.equal(cfg.state.currentRoot, join(homedir(), 'ref'));
+});
+
+test('선언되지 않은 상태 파일은 undefined, 검사가 없으면 빈 배열이다', () => {
+  const cfg = loadConfig(target({ state: { lessons: 'l.md' } }));
+  assert.equal(cfg.state.current, undefined);
+  assert.equal(cfg.state.decisions, undefined);
+  assert.deepEqual(cfg.checks, []);
+});
+
+test('설정 파일이 없으면 경로와 다음 행동을 알려주며 실패한다', () => {
   const dir = mkdtempSync(join(tmpdir(), 'harness-'));
   assert.throws(() => loadConfig(dir), /harness\.json 이 없다/);
   assert.throws(() => loadConfig(dir), /SETUP\.md/);
 });
 
+test('JSON 이 깨졌으면 경로와 함께 실패한다', () => {
+  const dir = target(null, { '.harness/harness.json': '{ 깨짐' });
+  assert.throws(() => loadConfig(dir), /읽지 못했다/);
+});
+
 test('모르는 검사 종류는 거부하고 쓸 수 있는 것을 알려준다', () => {
-  const dir = fixture({ map: 'AGENTS.md', state: {}, checks: [{ id: 'x', cmd: 'true', kind: '초능력' }] });
+  const dir = target({ checks: [{ id: 'x', cmd: 'node -v', kind: '초능력' }] });
   assert.throws(() => loadConfig(dir), /알 수 없는 검사 종류: 초능력/);
   assert.throws(() => loadConfig(dir), /junit-xml/);
 });
 
-test('선언되지 않은 상태 파일은 undefined 로 남는다', () => {
-  const dir = fixture({ map: 'AGENTS.md', state: { lessons: 'docs/lessons.md' }, checks: [] });
-  const cfg = loadConfig(dir);
-  assert.equal(cfg.state.current, undefined);
+test('⛔ 결과 파일로 판정하는 검사에 evidence 가 없으면 거부한다', () => {
+  const dir = target({ checks: [{ id: 't', cmd: 'npm test', kind: 'junit-xml' }] });
+  assert.throws(() => loadConfig(dir), /evidence 가 없다/);
+});
+
+// probe 스크립트를 공백·한글이 든 경로에 두고 실제로 실행한다
+function probe(body) {
+  const dir = target(null);
+  const lib = JSON.stringify(new URL('../lib/config.mjs', import.meta.url).href);
+  put(dir, '공백 있는 폴더/probe.mjs', `import { cli } from ${lib};\n${body}\n`);
+  return spawnSync(process.execPath, [join(dir, '공백 있는 폴더', 'probe.mjs')], { encoding: 'utf8' });
+}
+
+test('⭐ 직접 실행하면 main 이 돈다 — 판별이 틀리면 도구가 아무것도 안 하고 exit 0 으로 끝난다', () => {
+  const r = probe("cli(import.meta.url, () => console.log('돌았다'));");
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /돌았다/);
+});
+
+test('main 의 오류는 한 줄로 알리고 exit 1 이다', () => {
+  const r = probe("cli(import.meta.url, () => { throw new Error('일부러'); });");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /⛔ 일부러/);
+});
+
+test('import 만 하면 main 이 돌지 않는다', async () => {
+  let ran = false;
+  await cli(new URL('../tools/x.mjs', import.meta.url).href, () => {
+    ran = true;
+  });
+  assert.equal(ran, false);
 });
 ```
 
-- [ ] **Step 3: 테스트가 실패하는지 확인한다**
+- [x] **Step 4: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/config.test.mjs`
-Expected: FAIL — `Cannot find module '../lib/config.mjs'`
+Expected: FAIL — `Cannot find module '…/lib/config.mjs'`
 
-⛔ **컴파일/모듈 오류가 아닌 단언 실패를 원한다면 다음 단계 이후 다시 본다.** 지금은 모듈 부재가 맞는 실패다.
+- [x] **Step 5: `lib/config.mjs` 를 작성한다**
 
-- [ ] **Step 4: `harness.schema.json` 을 작성한다**
-
-```json
-{
-  "_note": "대상 저장소 루트의 harness.json 규격. 모든 도구가 이 파일 하나만 읽는다.",
-  "map": "규칙 지도 파일. 보통 AGENTS.md",
-  "plan": "구현 계획서. 대상 밖이면 상대경로로 (예: ../docs/plans/x.md)",
-  "state": {
-    "current": "STATE — 진행 상태 대장 (선택)",
-    "decisions": "DECISIONS — 묻지 않고 넘어간 가정 (선택)",
-    "lessons": "LESSONS — 반복 실패 (선택)"
-  },
-  "checks": [
-    {
-      "id": "검사 이름",
-      "cmd": "돌릴 명령",
-      "kind": "junit-xml | exit-code | file-unchanged",
-      "evidence": "판정할 결과 파일 글로브. exit-code 면 생략"
-    }
-  ]
-}
-```
-
-- [ ] **Step 5: `lib/config.mjs` 를 작성한다**
+`lib/config.mjs`:
 
 ```js
-import { readFileSync, existsSync } from 'node:fs';
+// 대상 저장소의 .harness/harness.json 로더 — 모든 도구의 유일한 경로 원천. 설계안.
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 
+export const CONFIG = join('.harness', 'harness.json');
 export const EVIDENCE_KINDS = ['junit-xml', 'exit-code', 'file-unchanged'];
 
+const expand = (p) => (p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(2)) : p);
+
 export function loadConfig(root) {
-  const path = join(root, 'harness.json');
+  const path = join(root, CONFIG);
   if (!existsSync(path)) {
-    throw new Error(`harness.json 이 없다: ${path}\n  SETUP.md 를 먼저 돌린다.`);
+    throw new Error(`harness.json 이 없다: ${path}\n  SETUP.md 를 먼저 따른다.`);
   }
   let raw;
   try {
@@ -178,215 +238,322 @@ export function loadConfig(root) {
   }
   for (const c of raw.checks ?? []) {
     if (!EVIDENCE_KINDS.includes(c.kind)) {
-      throw new Error(
-        `알 수 없는 검사 종류: ${c.kind} (검사 '${c.id}')\n  쓸 수 있는 것: ${EVIDENCE_KINDS.join(' · ')}`,
-      );
+      throw new Error(`알 수 없는 검사 종류: ${c.kind} (검사 '${c.id}')\n  쓸 수 있는 것: ${EVIDENCE_KINDS.join(' · ')}`);
+    }
+    if (c.kind !== 'exit-code' && !c.evidence) {
+      throw new Error(`검사 '${c.id}' 에 evidence 가 없다 — ${c.kind} 는 판정할 결과 파일이 있어야 한다`);
     }
   }
-  const abs = (p) => (p ? resolve(root, p) : undefined);
+  const abs = (p) => (p ? resolve(root, expand(p)) : undefined);
   return {
-    root,
-    map: abs(raw.map),
-    plan: abs(raw.plan),
+    root: resolve(root),
     state: {
       current: abs(raw.state?.current),
+      currentRoot: abs(raw.state?.currentRoot),
       decisions: abs(raw.state?.decisions),
       lessons: abs(raw.state?.lessons),
     },
     checks: (raw.checks ?? []).map((c) => ({ ...c, evidence: abs(c.evidence) })),
   };
 }
+
+// 직접 실행됐을 때만 main 을 돈다. 오류는 한 줄로 알리고 exit 1.
+// ⛔ `file://${argv[1]}` 비교는 Windows·심링크 경로에서 늘 거짓이라 도구가 조용히 아무것도 안 하고 exit 0 이 된다.
+export async function cli(url, main) {
+  if (!process.argv[1] || url !== pathToFileURL(realpathSync(process.argv[1])).href) return;
+  try {
+    await main();
+  } catch (e) {
+    console.error(`⛔ ${e.message}`);
+    process.exit(1);
+  }
+}
 ```
 
-- [ ] **Step 6: 테스트가 통과하는지 확인한다**
+- [x] **Step 6: 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/config.test.mjs`
-Expected: PASS — `# pass 4` · `# fail 0`
+Expected: PASS — `ℹ tests 10` · `ℹ pass 10` · `ℹ fail 0`
 
-⛔ **`# pass` 숫자를 눈으로 확인한다.** `node --test` 는 테스트가 0개여도 종료코드 0 이다 — 이 레포가 만들려는 바로 그 함정이다.
+⛔ **숫자를 눈으로 확인한다.** 러너 요약은 테스트 없는 파일도 `pass` 로 센다 — 이 레포가 막으려는 바로 그 함정이다.
 
 - [ ] **Step 7: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
-git add package.json harness.schema.json lib/config.mjs test/config.test.mjs
-git commit -m "feat: harness.json 규격과 설정 로더
+git add package.json .gitignore test/scene.mjs lib/config.mjs test/config.test.mjs
+git commit -m "feat: 설정 로더와 CLI 판별
 
-모든 도구가 경로를 하드코딩하지 않고 이 로더 하나만 거치게 한다. 대상이
-이미 쓰는 파일 위치(ICFR 의 docs/reference-audit.md · 루트 Need-Check.md)를
-옮기지 않아도 되는 것이 요점이다 — 옮기면 AGENTS.md 의 기존 참조가 깨진다.
+모든 도구가 대상의 .harness/harness.json 하나만 거치게 한다. 도구를
+대상 루트의 lib/·tools/ 가 아니라 .harness/ 아래에 두는 것은 흔한
+디렉터리 이름이 기존 코드와 부딪히기 때문이다.
 
-모르는 검사 종류를 로더에서 거부한다. verify 가 돌다가 알 수 없는 kind 를
-만나 조용히 건너뛰면 '검사가 돌았다'는 거짓 신호가 된다."
+⛔ 직접 실행 판별을 realpath + pathToFileURL 로 한다. 09-28 계획의
+\`file://\${argv[1]}\` 비교는 Windows 와 심링크 경로에서 늘 거짓이라
+verify 가 아무것도 안 돌고 exit 0 으로 끝난다 — 이 레포가 막으려는
+거짓 통과를 도구 스스로 만든다. 공백·한글 경로에서 실제로 실행해 지킨다."
 ```
 
 ---
 
-### Task 2: 증거 판정기 — `BUILD SUCCESSFUL` 을 믿지 않는다
+### Task 2: 증거 판정기 — `<testcase>` 를 센다
 
 **Files:**
 - Create: `lib/evidence.mjs`
-- Create: `test/fixtures/junit-pass.xml`, `test/fixtures/junit-empty.xml`, `test/fixtures/junit-fail.xml`
+- Create: `test/fixtures/junit-gradle-pass.xml` · `junit-gradle-fail.xml` · `junit-gradle-empty.xml` · `junit-node-stub.xml` · `junit-node-mixed.xml`
 - Test: `test/evidence.test.mjs`
 
 **Interfaces:**
-- Consumes: 없음
-- Produces: `judgeJunitXml(contents: string[]) → { ok: boolean, reason: string }` — `contents` 는 XML 파일 **본문 문자열의 배열**이다 (파일 읽기는 호출자 몫이라 테스트가 파일시스템에 안 묶인다).
+- Consumes: `fixture(name)` (Task 1)
+- Produces: `judgeJunitXml(contents: string[]) → { ok: boolean, reason: string }` — 파일 읽기는 호출자 몫이다
 
-- [ ] **Step 1: 고정 표본을 만든다**
+⭐ **실측 (Node 24.18):** `test()` 가 없는 파일을 `node --test` 는 `tests 1 · pass 1` · exit 0 으로 보고하고, junit 에는 파일 경로를 이름으로 한 통과 `<testcase>` 를 쓴다. `<testsuite tests="…">` 요약 속성도 이 파일을 센다. 그래서 요약이 아니라 `<testcase>` 를 하나씩 보고, 파일 경로 이름의 「빈 파일」 testcase 는 테스트로 치지 않는다.
 
-`test/fixtures/junit-pass.xml` — ICFR 실제 산출물에서 뜬 형태:
+- [x] **Step 1: 고정 표본을 만든다**
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.weaverloft.icfr.domain.admin.api.AdminTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-28T01:49:47.669Z" hostname="mac" time="4.458">
-  <properties/>
-</testsuite>
-```
-
-`test/fixtures/junit-empty.xml` — ⭐ **이 레포의 존재 이유.** 빌드는 성공인데 테스트가 0개다:
+`test/fixtures/junit-gradle-pass.xml`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.weaverloft.icfr.EmptySuite" tests="0" skipped="0" failures="0" errors="0" timestamp="2026-09-28T01:49:47.669Z" hostname="mac" time="0.001">
+<testsuite name="com.example.order.OrderServiceTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-02T01:00:00" hostname="ci" time="0.412">
   <properties/>
+  <testcase name="주문을 만든다()" classname="com.example.order.OrderServiceTest" time="0.120"/>
+  <testcase name="재고가 없으면 거절한다()" classname="com.example.order.OrderServiceTest" time="0.090"/>
+  <testcase name="취소하면 재고를 돌려놓는다()" classname="com.example.order.OrderServiceTest" time="0.200"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
 </testsuite>
 ```
 
-`test/fixtures/junit-fail.xml` — 속성 순서가 다른 것도 섞는다:
+`test/fixtures/junit-gradle-fail.xml` — 속성 순서가 다르고 failure 와 error 가 섞였다:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite errors="1" failures="2" name="com.weaverloft.icfr.domain.auth.api.AuthControllerTest" skipped="0" tests="9" time="1.128" timestamp="2026-09-28T01:49:52.128Z" hostname="mac">
-  <properties/>
+<testsuite errors="1" failures="2" name="com.example.auth.LoginControllerTest" skipped="0" tests="4" time="1.128" timestamp="2026-10-02T01:00:05" hostname="ci">
+  <testcase classname="com.example.auth.LoginControllerTest" name="정상 로그인()" time="0.1"/>
+  <testcase classname="com.example.auth.LoginControllerTest" name="비밀번호가 틀리면 401()" time="0.2">
+    <failure message="expected: &lt;401&gt; but was: &lt;200&gt;" type="org.opentest4j.AssertionFailedError">AssertionFailedError</failure>
+  </testcase>
+  <testcase classname="com.example.auth.LoginControllerTest" name="잠긴 계정은 423()" time="0.2">
+    <failure message="expected: &lt;423&gt; but was: &lt;401&gt;" type="org.opentest4j.AssertionFailedError">AssertionFailedError</failure>
+  </testcase>
+  <testcase classname="com.example.auth.LoginControllerTest" name="토큰을 발급한다()" time="0.3">
+    <error message="NullPointerException" type="java.lang.NullPointerException">NullPointerException</error>
+  </testcase>
 </testsuite>
 ```
 
-- [ ] **Step 2: 실패하는 테스트를 작성한다**
+`test/fixtures/junit-gradle-empty.xml` — 빌드는 성공인데 테스트가 0개다:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.EmptyTest" tests="0" skipped="0" failures="0" errors="0" timestamp="2026-10-02T01:00:00" hostname="ci" time="0.001">
+  <properties/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+```
+
+`test/fixtures/junit-node-stub.xml` — `test()` 가 없는 파일 하나를 돌린 Node 24 의 실제 출력 형태:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="test\empty.test.mjs" time="0.463704" classname="test" file="C:\work\app\test\empty.test.mjs"/>
+	<!-- tests 1 -->
+	<!-- suites 0 -->
+	<!-- pass 1 -->
+	<!-- fail 0 -->
+	<!-- cancelled 0 -->
+	<!-- skipped 0 -->
+	<!-- todo 0 -->
+	<!-- duration_ms 490.8141 -->
+</testsuites>
+```
+
+`test/fixtures/junit-node-mixed.xml` — 빈 파일 · 통과 · 건너뜀 · describe 안의 실패:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="test\empty.test.mjs" time="0.500505" classname="test" file="C:\work\app\test\empty.test.mjs"/>
+	<testcase name="adds" time="0.001423" classname="test" file="C:\work\app\test\real.test.mjs"/>
+	<testcase name="skipped one" time="0.000153" classname="test" file="C:\work\app\test\real.test.mjs">
+		<skipped type="skipped" message="true"/>
+	</testcase>
+	<testsuite name="group" time="0.002177" disabled="0" errors="0" tests="1" failures="1" skipped="0" hostname="ci">
+		<testcase name="inner fails" time="0.001791" classname="test" file="C:\work\app\test\real.test.mjs" failure="Expected values to be strictly equal:&#10;&#10;1 !== 2&#10;">
+			<failure type="testCodeFailure" message="Expected values to be strictly equal:&#10;&#10;1 !== 2">
+Error [ERR_TEST_FAILURE]: Expected values to be strictly equal:
+
+1 !== 2
+
+    at TestContext.&lt;anonymous> (file:///C:/work/app/test/real.test.mjs:5:60)
+			</failure>
+		</testcase>
+	</testsuite>
+	<!-- tests 4 -->
+	<!-- suites 1 -->
+	<!-- pass 2 -->
+	<!-- fail 1 -->
+	<!-- cancelled 0 -->
+	<!-- skipped 1 -->
+	<!-- todo 0 -->
+	<!-- duration_ms 588.7329 -->
+</testsuites>
+```
+
+- [x] **Step 2: 실패하는 테스트를 작성한다**
 
 `test/evidence.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { judgeJunitXml } from '../lib/evidence.mjs';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const fx = (name) => readFileSync(join(here, 'fixtures', name), 'utf8');
+import { fixture } from './scene.mjs';
 
 test('테스트가 있고 실패가 없으면 통과다', () => {
-  const r = judgeJunitXml([fx('junit-pass.xml')]);
+  const r = judgeJunitXml([fixture('junit-gradle-pass.xml')]);
   assert.equal(r.ok, true);
-  assert.match(r.reason, /테스트 10/);
+  assert.equal(r.reason, '테스트 3 · 실패 0');
 });
 
-test('⭐ 테스트 0개는 성공이 아니다', () => {
-  const r = judgeJunitXml([fx('junit-empty.xml')]);
+test('⭐ tests="0" 스위트는 성공이 아니다', () => {
+  const r = judgeJunitXml([fixture('junit-gradle-empty.xml')]);
   assert.equal(r.ok, false);
-  assert.match(r.reason, /테스트가 0개/);
+  assert.match(r.reason, /실행된 테스트가 0개/);
 });
 
-test('속성 순서가 달라도 실패를 읽는다', () => {
-  const r = judgeJunitXml([fx('junit-fail.xml')]);
+test('⭐ node --test 가 통과로 센 「테스트 없는 파일」은 테스트가 아니다', () => {
+  const r = judgeJunitXml([fixture('junit-node-stub.xml')]);
   assert.equal(r.ok, false);
-  assert.match(r.reason, /실패 2/);
-  assert.match(r.reason, /오류 1/);
+  assert.match(r.reason, /실행된 테스트가 0개/);
+  assert.match(r.reason, /테스트 없는 파일 1개/);
+});
+
+test('POSIX 경로의 테스트 없는 파일도 알아본다', () => {
+  const xml = '<testsuites><testcase name="test/empty.test.mjs" classname="test" file="/work/app/test/empty.test.mjs"/></testsuites>';
+  assert.match(judgeJunitXml([xml]).reason, /테스트 없는 파일 1개/);
+});
+
+test('속성 순서와 무관하게 failure·error 를 실패로 센다', () => {
+  const r = judgeJunitXml([fixture('junit-gradle-fail.xml')]);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, '테스트 4 · 실패 3');
+});
+
+test('node 출력에서 건너뜀과 테스트 없는 파일을 빼고 센다', () => {
+  const r = judgeJunitXml([fixture('junit-node-mixed.xml')]);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, '테스트 2 · 실패 1 · 건너뜀 1 · 테스트 없는 파일 1개는 세지 않았다');
 });
 
 test('여러 XML 을 합산한다 — 하나라도 실패면 실패다', () => {
-  const r = judgeJunitXml([fx('junit-pass.xml'), fx('junit-fail.xml')]);
+  const r = judgeJunitXml([fixture('junit-gradle-pass.xml'), fixture('junit-gradle-fail.xml')]);
   assert.equal(r.ok, false);
-  assert.match(r.reason, /테스트 19/);
+  assert.equal(r.reason, '테스트 7 · 실패 3');
+});
+
+test('⛔ 전부 건너뛰었으면 실행된 테스트가 0개다', () => {
+  const xml = '<testsuite tests="2"><testcase name="a"><skipped/></testcase><testcase name="b"><skipped/></testcase></testsuite>';
+  const r = judgeJunitXml([xml]);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /0개.*건너뜀 2/);
+});
+
+test('이름에 > 가 들어가도 testcase 를 놓치지 않는다', () => {
+  const r = judgeJunitXml(['<testsuite><testcase name="a > b" classname="x"/></testsuite>']);
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, '테스트 1 · 실패 0');
 });
 
 test('⭐ XML 이 한 개도 없으면 실패다 — 테스트가 안 돈 것이다', () => {
-  const r = judgeJunitXml([]);
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /한 개도/);
-});
-
-test('XML 은 있는데 testsuite 태그가 없으면 실패다', () => {
-  const r = judgeJunitXml(['<?xml version="1.0"?><other/>']);
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /한 개도/);
+  assert.match(judgeJunitXml([]).reason, /한 개도/);
+  assert.match(judgeJunitXml(['<?xml version="1.0"?><other/>']).reason, /한 개도/);
 });
 ```
 
-- [ ] **Step 3: 테스트가 실패하는지 확인한다**
+- [x] **Step 3: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/evidence.test.mjs`
-Expected: FAIL — `Cannot find module '../lib/evidence.mjs'`
+Expected: FAIL — `Cannot find module '…/lib/evidence.mjs'`
 
-- [ ] **Step 4: `lib/evidence.mjs` 를 작성한다**
+- [x] **Step 4: `lib/evidence.mjs` 를 작성한다**
+
+`lib/evidence.mjs`:
 
 ```js
-// 증거 판정. ⛔ 종료코드를 믿지 않는다 — 결과 파일을 읽어 판정한다.
-//
-// gradle 의 BUILD SUCCESSFUL 도, node --test 의 종료코드 0 도 테스트가
-// 0개일 때 성공이다. ICFR 의 AGENTS.md §3 이 이 함정을 사고 후에 규칙으로
-// 올렸고, 여기서는 기계가 판정한다.
+// ⑤ 증거 판정 — 종료코드도 러너 요약도 믿지 않고 결과 XML 의 <testcase> 를 하나씩 센다. 설계안.
+// 실측(Node 24): node --test 는 test() 가 없는 파일을 파일 경로 이름의 통과 testcase 로 보고한다.
 
-function attr(tag, name) {
-  const m = tag.match(new RegExp(`\\b${name}="(\\d+)"`));
-  return m ? Number(m[1]) : 0;
+const ATTRS = String.raw`(?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*`;
+const CASE = new RegExp(String.raw`<testcase\b(${ATTRS})\s*(?:\/>|>([\s\S]*?)<\/testcase>)`, 'g');
+
+function attr(attrs, name) {
+  const m = attrs.match(new RegExp(String.raw`\s${name}\s*=\s*(?:"([^"]*)"|'([^']*)')`));
+  return m ? (m[1] ?? m[2]) : undefined;
+}
+
+const slash = (p) => p.replace(/\\/g, '/');
+
+function isFileStub(attrs) {
+  const name = attr(attrs, 'name');
+  const file = attr(attrs, 'file');
+  return Boolean(name && file && /\.[cm]?[jt]sx?$/.test(name) && slash(file).endsWith(slash(name)));
 }
 
 export function judgeJunitXml(contents) {
-  let tests = 0;
-  let failures = 0;
-  let errors = 0;
-  let suites = 0;
+  let xmls = 0;
+  let run = 0;
+  let failed = 0;
+  let skipped = 0;
+  let stubs = 0;
 
   for (const text of contents) {
-    const m = text.match(/<testsuite\b[^>]*>/);
-    if (!m) continue;
-    suites += 1;
-    tests += attr(m[0], 'tests');
-    failures += attr(m[0], 'failures');
-    errors += attr(m[0], 'errors');
+    if (!/<testsuites?\b|<testcase\b/.test(text)) continue;
+    xmls += 1;
+    for (const [, attrs, body = ''] of text.matchAll(CASE)) {
+      const bad = /<(failure|error)\b/.test(body);
+      if (!bad && isFileStub(attrs)) stubs += 1;
+      else if (!bad && /<skipped\b/.test(body)) skipped += 1;
+      else {
+        run += 1;
+        if (bad) failed += 1;
+      }
+    }
   }
 
-  if (suites === 0) {
-    return { ok: false, reason: '결과 XML 을 한 개도 찾지 못했다 — 테스트가 돌지 않았다' };
+  const notes = [skipped && `건너뜀 ${skipped}`, stubs && `테스트 없는 파일 ${stubs}개는 세지 않았다`].filter(Boolean);
+  const tail = notes.map((n) => ` · ${n}`).join('');
+
+  if (xmls === 0) return { ok: false, reason: '결과 XML 을 한 개도 찾지 못했다 — 테스트가 돌지 않았다' };
+  if (run === 0) {
+    return { ok: false, reason: `실행된 테스트가 0개다 (XML ${xmls}개${tail}) — 종료코드와 러너 요약은 이것을 통과시킨다` };
   }
-  if (tests === 0) {
-    return {
-      ok: false,
-      reason: `테스트가 0개다 (XML ${suites}개) — 종료코드는 이것을 통과시킨다`,
-    };
-  }
-  if (failures + errors > 0) {
-    return { ok: false, reason: `테스트 ${tests} · 실패 ${failures} · 오류 ${errors}` };
-  }
-  return { ok: true, reason: `테스트 ${tests} · 실패 0 · 오류 0` };
+  if (failed > 0) return { ok: false, reason: `테스트 ${run} · 실패 ${failed}${tail}` };
+  return { ok: true, reason: `테스트 ${run} · 실패 0${tail}` };
 }
 ```
 
-- [ ] **Step 5: 테스트가 통과하는지 확인한다**
+- [x] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/evidence.test.mjs`
-Expected: PASS — `# pass 6` · `# fail 0`
+Expected: PASS — `ℹ tests 10` · `ℹ pass 10` · `ℹ fail 0`
 
 - [ ] **Step 6: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
 git add lib/evidence.mjs test/evidence.test.mjs test/fixtures/
-git commit -m "feat: 증거 판정기 — 종료코드가 아니라 결과 파일을 읽는다
+git commit -m "feat: 증거 판정기 — 요약이 아니라 testcase 를 센다
 
-⭐ 핵심은 tests=0 을 실패로 판정하는 것이다. gradle 의 BUILD SUCCESSFUL 도
-node --test 의 종료코드 0 도 테스트가 한 개도 없을 때 성공이다. ICFR 은
-이것을 사고로 겪고 AGENTS.md §3 에 '결과 XML 을 읽어 눈으로 확인한다'를
-넣었는데, 사람의 규율 대신 기계가 판정하게 한다.
+Node 24 실측: test() 가 없는 파일을 node --test 는 tests 1 · pass 1,
+exit 0 으로 보고하고 junit 에도 통과한 testcase 로 쓴다. 종료코드도
+러너 요약도 testsuite 의 tests 속성도 이 빈 파일을 테스트로 센다.
 
-XML 이 한 개도 없는 경우도 실패다 — 테스트가 아예 안 돈 것이고, 이때
-종료코드만 보면 통과로 보인다.
-
-속성 순서에 의존하지 않는다. gradle 이 내는 XML 의 속성 순서가 스위트마다
-다르다 (실측: tests 가 앞선 것과 errors 가 앞선 것이 섞여 있다)."
+그래서 <testcase> 를 하나씩 보고, 파일 경로를 이름으로 한 빈 파일
+testcase 와 건너뛴 것은 실행된 테스트로 치지 않는다. 실행된 테스트가
+0개면 실패다. 09-28 계획의 판정기는 <testsuite> 속성만 읽어 Node 출력은
+아예 읽지 못했다."
 ```
 
 ---
@@ -394,624 +561,614 @@ XML 이 한 개도 없는 경우도 실패다 — 테스트가 아예 안 돈 �
 ### Task 3: 완료 관문 러너 `verify.mjs`
 
 **Files:**
-- Create: `checks/verify.mjs`
-- Create: `templates/skills/verify-tests/SKILL.md`
+- Create: `tools/verify.mjs`
 - Test: `test/verify.test.mjs`
 
 **Interfaces:**
-- Consumes: `loadConfig` (Task 1) · `judgeJunitXml` (Task 2)
-- Produces: `runChecks(cfg) → Array<{ id, ok, reason }>` · CLI `node checks/verify.mjs [대상경로]` — 전부 통과면 exit 0, 하나라도 실패면 **exit 1**
+- Consumes: `loadConfig` · `cli` (Task 1) · `judgeJunitXml` (Task 2)
+- Produces: `runChecks(cfg) → Promise<Array<{ id, ok, reason, tail? }>>` · CLI `node .harness/tools/verify.mjs [대상]` — 전부 통과면 exit 0, 하나라도 실패하거나 **검사가 0개면 exit 1**
 
-⛔ 여기는 correctness 게이트다. Global Constraints 의 「검사는 드물게 울려야 신호다」가 적용되지 않는 유일한 자리다.
+⛔ 여기는 correctness 게이트다. 「검사는 드물게 울려야 신호다」가 적용되지 않는 자리다.
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+판정 규칙:
+- `exit-code` — 종료코드 0 이면 통과
+- `junit-xml` — **명령이 exit 0 이고, 이번 실행이 쓰거나 바꾼 XML 이 판정을 통과**해야 통과. 직전 실행의 XML 은 증거가 아니다
+- `file-unchanged` — 생성 명령이 exit 0 이고 `git status --porcelain -- <evidence>` 가 비어야 통과 (커밋된 적 없는 산출물도 「바뀐 것」)
+
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 `test/verify.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
-import { runChecks } from '../checks/verify.mjs';
+import { runChecks } from '../tools/verify.mjs';
+import { target, put, fixture } from './scene.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
+const VERIFY = fileURLToPath(new URL('../tools/verify.mjs', import.meta.url));
 
-function project(harness, files = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
-  writeFileSync(join(dir, 'harness.json'), JSON.stringify(harness));
-  for (const [rel, src] of Object.entries(files)) {
-    mkdirSync(join(dir, dirname(rel)), { recursive: true });
-    cpSync(join(here, 'fixtures', src), join(dir, rel));
-  }
+// src 를 dest 로 새로 쓰고 code 로 끝나는 명령 — 셸을 가리지 않게 node 로 쓴다
+const write = (src, dest, code = 0) =>
+  `node -e "const f=require('fs'),p=require('path');f.mkdirSync(p.dirname('${dest}'),{recursive:true});f.writeFileSync('${dest}',f.readFileSync('${src}'));process.exit(${code})"`;
+const exit = (code) => `node -e "process.exit(${code})"`;
+const one = async (dir) => (await runChecks(loadConfig(dir)))[0];
+
+test('exit-code 검사는 종료코드로 판정한다', async () => {
+  const ok = await one(target({ checks: [{ id: 'ok', cmd: exit(0), kind: 'exit-code' }] }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.reason, '종료코드 0');
+  const no = await one(target({ checks: [{ id: 'no', cmd: exit(3), kind: 'exit-code' }] }));
+  assert.equal(no.ok, false);
+  assert.equal(no.reason, '종료코드 3');
+});
+
+test('⭐ 명령이 exit 0 이어도 결과 XML 에 실행된 테스트가 없으면 실패다', async () => {
+  const dir = target(
+    { checks: [{ id: 't', cmd: write('src/stub.xml', 'results/junit.xml'), kind: 'junit-xml', evidence: 'results' }] },
+    { 'src/stub.xml': fixture('junit-node-stub.xml') },
+  );
+  const r = await one(dir);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /실행된 테스트가 0개/);
+});
+
+test('결과 XML 이 정상이면 통과다', async () => {
+  const dir = target(
+    { checks: [{ id: 't', cmd: write('src/pass.xml', 'results/junit.xml'), kind: 'junit-xml', evidence: 'results' }] },
+    { 'src/pass.xml': fixture('junit-gradle-pass.xml') },
+  );
+  const r = await one(dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, '테스트 3 · 실패 0');
+});
+
+test('⭐ 이번 실행이 쓰지 않은 결과 XML 은 증거가 아니다', async () => {
+  const dir = target(
+    { checks: [{ id: 't', cmd: exit(0), kind: 'junit-xml', evidence: 'results' }] },
+    { 'results/old.xml': fixture('junit-gradle-pass.xml') },
+  );
+  const r = await one(dir);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /갱신되지 않았다/);
+});
+
+test('결과 XML 이 정상이어도 명령이 실패했으면 실패다', async () => {
+  const dir = target(
+    { checks: [{ id: 't', cmd: write('src/pass.xml', 'results/junit.xml', 1), kind: 'junit-xml', evidence: 'results' }] },
+    { 'src/pass.xml': fixture('junit-gradle-pass.xml') },
+  );
+  const r = await one(dir);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, '종료코드 1 · 테스트 3 · 실패 0');
+});
+
+test('evidence 가 파일 하나여도 읽는다', async () => {
+  const dir = target(
+    { checks: [{ id: 't', cmd: write('src/pass.xml', 'junit.xml'), kind: 'junit-xml', evidence: 'junit.xml' }] },
+    { 'src/pass.xml': fixture('junit-gradle-pass.xml') },
+  );
+  assert.equal((await one(dir)).ok, true);
+});
+
+// 산출물을 커밋한 git 저장소. harness.json 은 커밋 뒤에 쓴다
+function repo(files) {
+  const dir = target(null, files);
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir });
+  git('init', '-q');
+  git('config', 'core.autocrlf', 'false');
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  put(dir, '.harness/harness.json', JSON.stringify({
+    checks: [{ id: 'api', cmd: write('gen/api.json', 'api.json'), kind: 'file-unchanged', evidence: 'api.json' }],
+  }));
   return dir;
 }
 
-test('exit-code 검사는 명령의 종료코드로 판정한다', async () => {
-  const dir = project({ map: 'AGENTS.md', state: {}, checks: [{ id: 'ok', cmd: 'true', kind: 'exit-code' }] });
-  const [r] = await runChecks(loadConfig(dir));
-  assert.equal(r.ok, true);
-  assert.equal(r.id, 'ok');
+test('file-unchanged: 다시 만든 산출물이 그대로면 통과, 바뀌면 실패다', async () => {
+  const same = await one(repo({ 'api.json': '{"v":1}\n', 'gen/api.json': '{"v":1}\n' }));
+  assert.equal(same.ok, true);
+  const changed = await one(repo({ 'api.json': '{"v":1}\n', 'gen/api.json': '{"v":2}\n' }));
+  assert.equal(changed.ok, false);
+  assert.match(changed.reason, /바뀌었다/);
 });
 
-test('exit-code 검사가 실패하면 실패다', async () => {
-  const dir = project({ map: 'AGENTS.md', state: {}, checks: [{ id: 'no', cmd: 'false', kind: 'exit-code' }] });
-  const [r] = await runChecks(loadConfig(dir));
+test('⛔ file-unchanged: 커밋된 적 없는 산출물은 그대로가 아니다', async () => {
+  const r = await one(repo({ 'readme.md': 'x\n', 'gen/api.json': '{"v":1}\n' }));
   assert.equal(r.ok, false);
+  assert.match(r.reason, /바뀌었다/);
 });
 
-test('⭐ junit-xml 검사는 명령이 성공해도 결과 파일로 판정한다', async () => {
-  const dir = project(
-    { map: 'AGENTS.md', state: {}, checks: [{ id: 't', cmd: 'true', kind: 'junit-xml', evidence: 'results' }] },
-    { 'results/TEST-Empty.xml': 'junit-empty.xml' },
-  );
-  const [r] = await runChecks(loadConfig(dir));
-  assert.equal(r.ok, false, '명령은 exit 0 이지만 테스트가 0개다');
-  assert.match(r.reason, /테스트가 0개/);
+test('⛔ CLI: 검사가 0개면 exit 1 이다 — 「검사가 없어 전부 통과」는 거짓 신호다', () => {
+  const r = spawnSync(process.execPath, [VERIFY, target({ checks: [] })], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /선언된 검사가 없다/);
 });
 
-test('junit-xml 검사가 정상 결과면 통과다', async () => {
-  const dir = project(
-    { map: 'AGENTS.md', state: {}, checks: [{ id: 't', cmd: 'true', kind: 'junit-xml', evidence: 'results' }] },
-    { 'results/TEST-Ok.xml': 'junit-pass.xml' },
-  );
-  const [r] = await runChecks(loadConfig(dir));
-  assert.equal(r.ok, true);
+test('CLI: 실패한 검사를 이유와 함께 보이고 exit 1 이다', () => {
+  const dir = target({ checks: [{ id: '빌드', cmd: exit(0), kind: 'exit-code' }, { id: '테스트', cmd: exit(2), kind: 'exit-code' }] });
+  const r = spawnSync(process.execPath, [VERIFY, dir], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /✅ 빌드 — 종료코드 0/);
+  assert.match(r.stdout, /⛔ 테스트 — 종료코드 2/);
 });
 
-test('검사가 없으면 빈 배열이다 — 조용히 통과시키지 않는다', async () => {
-  const dir = project({ map: 'AGENTS.md', state: {}, checks: [] });
-  const rs = await runChecks(loadConfig(dir));
-  assert.deepEqual(rs, []);
+test('CLI: 전부 통과면 exit 0 이다', () => {
+  const r = spawnSync(process.execPath, [VERIFY, target({ checks: [{ id: 'ok', cmd: exit(0), kind: 'exit-code' }] })], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
+- [x] **Step 2: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/verify.test.mjs`
-Expected: FAIL — `Cannot find module '../checks/verify.mjs'`
+Expected: FAIL — `Cannot find module '…/tools/verify.mjs'`
 
-- [ ] **Step 3: `checks/verify.mjs` 를 작성한다**
+- [x] **Step 3: `tools/verify.mjs` 를 작성한다**
+
+`tools/verify.mjs`:
 
 ```js
 #!/usr/bin/env node
-// ⑤ 완료 관문. 검증됨 — ICFR 의 junit-verify · specCoverage · openapiSnapshot 에서 나왔다.
-//
-// ⛔ 이것은 correctness 게이트다. 실패하면 exit 1 이다.
+// ⑤ 완료 관문 — 선언된 검사를 돌리고 이번 실행이 쓴 결과 파일로 판정한다. 설계안.
+// ⛔ correctness 게이트: 하나라도 실패하거나 검사가 0개면 exit 1.
 
-import { execFile } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { loadConfig } from '../lib/config.mjs';
+import { join, relative } from 'node:path';
+import { loadConfig, cli } from '../lib/config.mjs';
 import { judgeJunitXml } from '../lib/evidence.mjs';
 
-const run = promisify(execFile);
+const status = (err) => (err ? (Number.isInteger(err.code) ? err.code : 1) : 0);
 
-async function shell(cmd, cwd) {
-  try {
-    await run('/bin/sh', ['-c', cmd], { cwd, maxBuffer: 32 * 1024 * 1024 });
-    return { code: 0 };
-  } catch (e) {
-    return { code: e.code ?? 1, stderr: String(e.stderr ?? '').slice(-2000) };
-  }
+function shell(cmd, cwd) {
+  return new Promise((done) =>
+    exec(cmd, { cwd, maxBuffer: 1 << 28 }, (err, stdout, stderr) =>
+      done({ code: status(err), tail: `${stdout}${stderr}`.slice(-1500) })));
 }
 
-function xmlsUnder(dir) {
-  if (!existsSync(dir)) return [];
-  if (statSync(dir).isFile()) return [readFileSync(dir, 'utf8')];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith('.xml'))
-    .map((f) => readFileSync(join(dir, f), 'utf8'));
+function git(args, cwd) {
+  return new Promise((done) => execFile('git', args, { cwd }, (err, stdout) => done({ code: status(err), out: String(stdout) })));
+}
+
+// 결과 XML → mtime. 실행 전후를 비교해 이번 실행이 쓴 파일만 증거로 친다
+function xmlTimes(path) {
+  if (!existsSync(path)) return new Map();
+  if (statSync(path).isFile()) return new Map([[path, statSync(path).mtimeMs]]);
+  return new Map(
+    readdirSync(path, { recursive: true })
+      .map(String)
+      .filter((f) => f.endsWith('.xml'))
+      .map((f) => [join(path, f), statSync(join(path, f)).mtimeMs]),
+  );
+}
+
+async function check(c, root) {
+  if (c.kind === 'exit-code') {
+    const r = await shell(c.cmd, root);
+    return { ok: r.code === 0, reason: `종료코드 ${r.code}`, tail: r.tail };
+  }
+  if (c.kind === 'junit-xml') {
+    const before = xmlTimes(c.evidence);
+    const r = await shell(c.cmd, root);
+    const after = xmlTimes(c.evidence);
+    const fresh = [...after].filter(([f, t]) => before.get(f) !== t).map(([f]) => readFileSync(f, 'utf8'));
+    if (fresh.length === 0 && after.size > 0) {
+      return { ok: false, reason: `결과 XML 이 이번 실행에서 갱신되지 않았다 (종료코드 ${r.code}) — 이전 결과를 증거로 쓰지 않는다`, tail: r.tail };
+    }
+    const j = judgeJunitXml(fresh);
+    return r.code === 0 ? { ...j, tail: r.tail } : { ok: false, reason: `종료코드 ${r.code} · ${j.reason}`, tail: r.tail };
+  }
+  // file-unchanged — 산출물을 다시 만들었을 때 git 이 깨끗하면 계약이 안 바뀐 것이다
+  const r = await shell(c.cmd, root);
+  if (r.code !== 0) return { ok: false, reason: `생성 명령 종료코드 ${r.code}`, tail: r.tail };
+  const g = await git(['status', '--porcelain', '--', relative(root, c.evidence)], root);
+  if (g.code !== 0) return { ok: false, reason: `git status 실패 (종료코드 ${g.code}) — git 저장소인가` };
+  if (g.out.trim() === '') return { ok: true, reason: '산출물이 그대로다' };
+  return { ok: false, reason: '산출물이 바뀌었다 — 바뀐 계약을 커밋에 포함해야 한다' };
 }
 
 export async function runChecks(cfg) {
   const out = [];
-  for (const c of cfg.checks) {
-    const res = await shell(c.cmd, cfg.root);
-    if (c.kind === 'exit-code') {
-      out.push({ id: c.id, ok: res.code === 0, reason: `종료코드 ${res.code}` });
-    } else if (c.kind === 'junit-xml') {
-      const j = judgeJunitXml(xmlsUnder(c.evidence));
-      out.push({ id: c.id, ok: j.ok, reason: j.reason });
-    } else if (c.kind === 'file-unchanged') {
-      const g = await shell(`git diff --quiet -- ${JSON.stringify(c.evidence)}`, cfg.root);
-      out.push({
-        id: c.id,
-        ok: g.code === 0,
-        reason: g.code === 0 ? '산출물이 그대로다' : '산출물이 바뀌었다 — 커밋에 포함해야 한다',
-      });
-    }
-  }
+  for (const c of cfg.checks) out.push({ id: c.id, ...(await check(c, cfg.root)) });
   return out;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const root = process.argv[2] ?? process.cwd();
-  const results = await runChecks(loadConfig(root));
-  if (results.length === 0) {
-    console.error('⛔ 선언된 검사가 없다 — harness.json 의 checks 가 비어 있다');
-    process.exit(1);
+cli(import.meta.url, async () => {
+  const results = await runChecks(loadConfig(process.argv[2] ?? process.cwd()));
+  if (results.length === 0) throw new Error('선언된 검사가 없다 — .harness/harness.json 의 checks 가 비어 있다');
+  for (const r of results) {
+    console.log(`${r.ok ? '✅' : '⛔'} ${r.id} — ${r.reason}`);
+    if (!r.ok && r.tail?.trim()) {
+      console.log(r.tail.trim().split(/\r?\n/).slice(-15).map((l) => `    ${l}`).join('\n'));
+    }
   }
-  for (const r of results) console.log(`${r.ok ? '✅' : '⛔'} ${r.id} — ${r.reason}`);
   process.exit(results.every((r) => r.ok) ? 0 : 1);
-}
+});
 ```
 
-⭐ **검사가 0개면 exit 1 이다.** 「검사가 없어서 전부 통과」는 이 레포가 막으려는 바로 그 거짓 신호다.
-
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
+- [x] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/verify.test.mjs`
-Expected: PASS — `# pass 5` · `# fail 0`
+Expected: PASS — `ℹ tests 11` · `ℹ pass 11` · `ℹ fail 0`
 
-- [ ] **Step 5: `verify-tests` 스킬을 작성한다**
-
-`templates/skills/verify-tests/SKILL.md`:
-
-```markdown
----
-name: verify-tests
-description: 테스트를 쓰거나 통과를 주장하기 전에 쓴다 — 실패를 먼저 확인하고, 종료코드가 아니라 결과 파일을 읽어 판정한다
----
-
-# 테스트 검증
-
-> 상태: **검증됨** — ICFR `icfr-backend` 의 `junit-verify` 에서 나왔다.
-
-## 절차
-
-1. **실패하는 테스트를 먼저 쓴다**
-2. ⛔ **실제로 실패하는지 실행해 확인한다** — 컴파일 오류가 아닌 **단언 실패**여야 의미가 있다
-3. 구현한다
-4. 통과를 실행해 확인한다
-5. ⛔ **`node checks/verify.mjs` 로 판정한다.** `BUILD SUCCESSFUL` · 종료코드 0 으로 통과를 주장하지 않는다
-
-## ⛔ 음성 케이스를 반드시 넣는다
-
-「되는 것」만 테스트하지 않는다. **막혀야 하는 것이 막히는지**를 함께 검증한다.
-
-자동설정이 모듈 단위로 갈린 프레임워크(Spring Boot 4 등)에서는 모듈이 빠지면 기능이
-**예외도 경고도 없이 조용히 비활성화된다.** ICFR 에서 Flyway 가 실제로 그렇게 안 돌았다.
-보안에서 같은 일이 나면 인증이 그냥 뚫린다.
-
-## 왜 종료코드를 믿지 않는가
-
-테스트가 0개여도 성공한다. `checks/verify.mjs` 의 `junit-xml` 판정이 이것을 잡는다.
-```
-
-- [ ] **Step 6: 커밋한다**
+- [ ] **Step 5: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
-git add checks/verify.mjs templates/skills/verify-tests/SKILL.md test/verify.test.mjs
-git commit -m "feat: 완료 관문 러너와 verify-tests 스킬
+git add tools/verify.mjs test/verify.test.mjs
+git commit -m "feat: 완료 관문 러너 verify
 
-harness.json 의 checks 를 돌리고 종료코드가 아니라 결과 파일로 판정한다.
-junit-xml 검사는 명령이 exit 0 이어도 XML 을 읽어 tests=0 이면 실패로
-본다 — 테스트가 이 경로를 직접 지킨다.
+선언된 검사를 돌리고 종료코드가 아니라 결과 파일로 판정한다.
 
-⭐ 검사가 0개면 exit 1 이다. '선언된 검사가 없어서 전부 통과'는 이 레포가
-막으려는 거짓 신호 그 자체다.
+⭐ 이번 실행이 쓰거나 바꾼 XML 만 증거로 친다. 테스트 명령이 바뀌어
+아무것도 안 돌았는데 직전 실행의 통과 XML 이 남아 있으면, 결과 파일만
+읽는 판정은 그것을 통과시킨다. 실행 전후 mtime 을 비교해 막는다.
+결과 XML 이 정상이어도 명령이 실패했으면 실패다.
 
-file-unchanged 는 ICFR 의 openapiSnapshot + pre-push 를 일반화한 것이다 —
-생성물을 다시 만들었을 때 git 이 깨끗하면 계약이 안 바뀐 것이다."
+검사가 0개면 exit 1 이다. file-unchanged 는 git status 로 보아 커밋된 적
+없는 산출물도 바뀐 것으로 친다. 명령은 exec 의 플랫폼 기본 셸로 돌려
+sh 가 없는 Windows 에서도 돈다."
 ```
 
 ---
 
-### Task 4: 태스크 경계 게이트 `close-task` 스킬
+### Task 4: 상태 대장 검사기 `state-check.mjs`
 
 **Files:**
-- Create: `templates/skills/close-task/SKILL.md`
-- Create: `checks/regression-cases/README.md`
+- Create: `lib/mdtable.mjs` · `tools/state-check.mjs` · `templates/state/current.md`
+- Test: `test/mdtable.test.mjs` · `test/state-check.test.mjs`
 
 **Interfaces:**
-- Consumes: `checks/verify.mjs` (Task 3) · `tools/lesson-append.mjs` (Task 7, 아직 없음 — 스킬 문서가 미리 가리킨다)
-- Produces: 대상 저장소에 설치되는 스킬. 승인된 결정 2번(보안 상시 훅 제거)이 여기에 편입된다
+- Consumes: `loadConfig` · `cli` (Task 1) · `target` · `repoFile` (Task 1)
+- Produces:
+  - `cells(line: string) → string[] | null` — 표 한 줄의 칸. 값 안의 `\|` 는 구분자가 아니다
+  - `parseAuditRows(text) → Array<{ target, status, hash }>` — `` | `경로` | 상태 | `해시` | `` 형식의 행만
+  - `hash12(bytes) → string` — 줄바꿈을 LF 로 맞춘 SHA-256 앞 12자
+  - `auditState(cfg) → { total, stale: Array<{ target, hash }>, missing: string[], remaining, integrityOk }`
 
-⚠️ 이 태스크에는 코드가 없어 자동 테스트가 없다. 검증은 Phase 5 의 ICFR 적용에서 실제로 한 태스크를 닫아보는 것으로 한다.
+상태 값: `분석완료` · `부분분석` 은 해시를 대조하고, `미분석` 은 잔량, `해당없음` 은 어디에도 세지 않는다. `state.currentRoot` 가 없으면 대상 루트 기준이다.
 
-- [ ] **Step 1: `close-task` 스킬을 작성한다**
+- [x] **Step 1: 대장 템플릿을 만든다**
 
-`templates/skills/close-task/SKILL.md`:
-
-```markdown
----
-name: close-task
-description: 계획서의 태스크 하나를 끝낼 때 쓴다 — 검사 전량 · 증거 요약 · 커밋 · 보안 리뷰 1회 · 상태 갱신을 한 경계에서 처리한다
----
-
-# 태스크 닫기
-
-> 상태: **설계안** — 구성요소(검사·커밋·보안리뷰)는 ICFR 에서 검증됐으나 한 게이트로 묶은 것은 처음이다.
-
-## 왜 경계인가
-
-자율 루프는 멈추지 않으므로 **자연스러운 검사 지점이 태스크 경계뿐**이다.
-턴마다 도는 상시 훅은 세 가지를 동시에 망친다 — 토큰을 소모하고, 루프를 깨우고,
-객관적 기준 없는 리뷰어를 매 턴 추가한다.
-
-## 절차
-
-1. `node checks/verify.mjs` — ⛔ exit 0 이 아니면 여기서 멈춘다
-2. 증거를 요약한다 — 검사 이름과 판정 근거를 그대로 옮긴다. 「통과했다」로 줄이지 않는다
-3. 커밋한다 — 제목은 무엇을, 본문은 **왜**. 계획서와 다르게 갔으면 그 이유를 남긴다
-4. `/security-review` **1회** — 내장 스킬이다. 플러그인이 아니다
-5. 상태를 갱신한다 — 계획서 체크박스, `harness.json` 의 `state.current`
-6. 막힌 것이 있으면 `state.decisions` 에 가정과 함께 적는다. ⛔ **묻느라 멈추지 않는다**
-7. 같은 실패가 반복됐으면 `node tools/lesson-append.mjs` 로 적는다
-
-## ⛔ 하지 않는 것
-
-| ⛔ | 왜 |
-|---|---|
-| 검사를 건너뛰고 커밋 | 증거 없는 완료 주장이다 |
-| `/security-review` 를 매 턴 | 상시 훅으로 되돌아가는 것이다 |
-| 답을 못 얻어 멈추기 | 가정을 적고 진행한다 |
-```
-
-- [ ] **Step 2: 재현 케이스 규약을 작성한다**
-
-`checks/regression-cases/README.md`:
+`templates/state/current.md`:
 
 ```markdown
-# 재현 케이스
+# 진행 상태 대장
 
 > 상태: **설계안**
 
-실패를 고쳤으면 **같은 환경에서 재실행하지 않는다.** 근본 원인을 고치고 **재현 케이스를 남긴다.**
+어디까지 갔는지가 **대화가 아니라 이 파일에 있다.** 세션이 끊겨도 `node .harness/tools/state-check.mjs` 한 번이면 이어받는다.
 
-| | |
+| 값 | 뜻 |
 |---|---|
-| 파일명 | `<lessons 의 id>.md` — LESSONS 항목과 1:1 |
-| 내용 | 증상 · 최소 재현 · 근본 원인 · 이제 무엇이 막는가 |
+| `분석완료` | 끝까지 읽고 대조했다 |
+| `부분분석` | 일부만 봤다 — 다시 봐야 한다 |
+| `미분석` | 아직 열어보지 않았다 |
+| `해당없음` | 대상 밖 |
 
-⛔ **「이제 무엇이 막는가」가 비면 이 파일은 일기다.** 막는 것이 테스트면 그 테스트 이름을,
-규약이면 `AGENTS.md` 의 절 번호를 적는다.
+**해시가 바뀌면 상태가 무효가 된다.** `state-check` 가 그 행을 재작업 대상으로 돌려보내며 현재 해시를 알려준다.
+
+⛔ **읽은 척하지 않는다.** 일부만 본 것은 `부분분석` 이다.
+
+## 대장
+
+| 파일 | 상태 | 해시 | 메모 |
+|---|---|---|---|
 ```
 
-- [ ] **Step 3: 커밋한다**
-
-```bash
-cd ~/Projects/agent-harness
-git add templates/skills/close-task/SKILL.md checks/regression-cases/README.md
-git commit -m "feat: 태스크 경계 게이트 close-task
-
-승인된 결정 2번(보안 상시 훅 제거)이 여기에 앉는다. security-guidance 는
-Stop·SubagentStop·commit·push 여섯 곳에 LLM 리뷰를 걸어 자율 루프에서
-턴마다·커밋마다 돌았다. 아티클이 안티패턴으로 꼽은 '객관적 기준 없이
-리뷰어 에이전트 추가'이고, ICFR 의 주간 토큰 60% 이탈 조건을 스스로
-앞당긴다.
-
-⇒ 결정론적 검사(verify.mjs)를 먼저 통과시키고, 주관적 리뷰는 태스크
-경계에서 1회만 부른다. /security-review 는 내장 스킬이라 플러그인을
-빼도 남는다."
-```
-
----
-
-# Phase 2 — ④ 상태 · 결정 · LESSONS
-
-### Task 5: 상태 대장 검사기 `state-check.mjs`
-
-**Files:**
-- Create: `lib/mdtable.mjs`
-- Modify: `lib/config.mjs` — `state.currentRoot` 와 `~` 확장을 더한다
-- Create: `tools/state-check.mjs`
-- Test: `test/mdtable.test.mjs`, `test/state-check.test.mjs`
-
-**Interfaces:**
-- Consumes: `loadConfig` (Task 1)
-- Produces:
-  - `parseAuditRows(text: string) → Array<{ target: string, status: string, hash: string }>`
-  - `hash12(bytes: Buffer) → string` — SHA-256 앞 12자 (ICFR `referenceAudit` 와 같은 폭)
-  - CLI `node tools/state-check.mjs [대상경로]`
-
-ICFR 실측 형식 — 한 행은 `| \`경로\` | 상태 | \`해시\` | 회차 | 메모 |` 다.
-
-- [ ] **Step 1: 실패하는 표 파서 테스트를 작성한다**
+- [x] **Step 2: 실패하는 표 파서 테스트를 작성한다**
 
 `test/mdtable.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAuditRows } from '../lib/mdtable.mjs';
+import { parseAuditRows, cells, hash12 } from '../lib/mdtable.mjs';
+import { repoFile } from './scene.mjs';
 
-const SAMPLE = [
-  '# 레퍼런스 분석 대장',
-  '',
-  '| | |',
-  '|---|---|',
-  '| 갱신일 | 2026-09-28 |',
-  '',
+const LEDGER = [
   '| 값 | 뜻 |',
   '|---|---|',
   '| `분석완료` | 끝까지 읽었다 |',
   '',
-  '| 파일 | 상태 | 해시 | 회차 | 메모 |',
-  '|---|---|---|---|---|',
-  '| `src/engine.ts` | 분석완료 | `a1b2c3d4e5f6` | 1 | 표본 알고리즘 |',
-  '| `src/App.tsx` | 미분석 | `` | - | |',
+  '| 파일 | 상태 | 해시 | 메모 |',
+  '|---|---|---|---|',
+  '| `src/engine.ts` | 분석완료 | `a1b2c3d4e5f6` | 표본 |',
+  '| `src/App.tsx` | 미분석 | `` | |',
 ].join('\n');
 
 test('경로·상태·해시 세 칸을 가진 행만 뽑는다', () => {
-  const rows = parseAuditRows(SAMPLE);
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows[0], { target: 'src/engine.ts', status: '분석완료', hash: 'a1b2c3d4e5f6' });
+  assert.deepEqual(parseAuditRows(LEDGER), [
+    { target: 'src/engine.ts', status: '분석완료', hash: 'a1b2c3d4e5f6' },
+    { target: 'src/App.tsx', status: '미분석', hash: '' },
+  ]);
 });
 
-test('⛔ 상태 값 설명표를 데이터로 오인하지 않는다', () => {
-  const rows = parseAuditRows(SAMPLE);
-  assert.ok(!rows.some((r) => r.target === '분석완료'), '설명표 행이 섞였다');
+test('CRLF 파일도 같게 읽는다', () => {
+  assert.deepEqual(parseAuditRows(LEDGER.replace(/\n/g, '\r\n')), parseAuditRows(LEDGER));
 });
 
-test('해시가 비어 있어도 행으로 읽는다', () => {
-  const rows = parseAuditRows(SAMPLE);
-  assert.equal(rows[1].hash, '');
+test('⛔ 대장 템플릿의 설명표를 데이터로 오인하지 않는다', () => {
+  assert.deepEqual(parseAuditRows(repoFile('templates/state/current.md')), []);
 });
 
-test('표가 하나도 없으면 빈 배열이다', () => {
-  assert.deepEqual(parseAuditRows('# 제목뿐'), []);
+test('값 안의 \\| 는 칸 구분자가 아니다', () => {
+  assert.deepEqual(cells('| a \\| b | c |'), ['a \\| b', 'c']);
+  assert.equal(cells('표가 아닌 줄'), null);
+});
+
+test('해시는 12자이고 줄바꿈 방식에 흔들리지 않는다', () => {
+  assert.match(hash12(Buffer.from('a\nb')), /^[0-9a-f]{12}$/);
+  assert.equal(hash12(Buffer.from('a\r\nb')), hash12(Buffer.from('a\nb')));
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
+- [x] **Step 3: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/mdtable.test.mjs`
-Expected: FAIL — `Cannot find module '../lib/mdtable.mjs'`
+Expected: FAIL — `Cannot find module '…/lib/mdtable.mjs'`
 
-- [ ] **Step 3: `lib/mdtable.mjs` 를 작성한다**
+- [x] **Step 4: `lib/mdtable.mjs` 를 작성한다**
+
+`lib/mdtable.mjs`:
 
 ```js
+// 마크다운 표 — 칸 분리, 대장 행 파서, 줄바꿈에 흔들리지 않는 해시. 설계안.
 import { createHash } from 'node:crypto';
 
-// ICFR referenceAudit 과 같은 행 형식: | `경로` | 상태 | `해시` | …
-// 설명표(| `분석완료` | 뜻 |)는 세 번째 칸이 백틱 해시 자리가 아니므로 걸리지 않는다.
-const ROW = /^\|\s*`([^`]+)`\s*\|\s*(\S+)\s*\|\s*`([^`]*)`\s*\|/;
+// 표 한 줄의 칸. 값 안의 \| 는 구분자가 아니다
+export function cells(line) {
+  const t = line.trim();
+  if (!t.startsWith('|')) return null;
+  return t
+    .replace(/^\|/, '')
+    .replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/)
+    .map((s) => s.trim());
+}
 
+// | `경로` | 상태 | `해시` | … — 상태 설명표(| `분석완료` | 뜻 |)는 셋째 칸이 백틱 해시가 아니라 걸리지 않는다
 export function parseAuditRows(text) {
   const rows = [];
-  for (const line of text.split('\n')) {
-    const m = ROW.exec(line);
-    if (m) rows.push({ target: m[1], status: m[2], hash: m[3] });
+  for (const line of text.split(/\r?\n/)) {
+    const c = cells(line);
+    if (!c || c.length < 3) continue;
+    const target = c[0].match(/^`([^`]+)`$/);
+    const hash = c[2].match(/^`([^`]*)`$/);
+    if (target && hash) rows.push({ target: target[1], status: c[1], hash: hash[1] });
   }
   return rows;
 }
 
-export function hash12(bytes) {
-  return createHash('sha256').update(bytes).digest('hex').slice(0, 12);
-}
+// CRLF 를 LF 로 맞춰 해시한다 — OS 마다 체크아웃 줄바꿈이 달라도 같은 파일은 같은 해시
+export const hash12 = (bytes) =>
+  createHash('sha256')
+    .update(Buffer.from(Buffer.from(bytes).toString('latin1').replace(/\r\n/g, '\n'), 'latin1'))
+    .digest('hex')
+    .slice(0, 12);
 ```
 
-- [ ] **Step 4: 표 파서 테스트가 통과하는지 확인한다**
+- [x] **Step 5: 표 파서 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/mdtable.test.mjs`
-Expected: PASS — `# pass 4` · `# fail 0`
+Expected: PASS — `ℹ tests 5` · `ℹ pass 5` · `ℹ fail 0`
 
-- [ ] **Step 5: `lib/config.mjs` 에 `currentRoot` 와 `~` 확장을 더한다**
-
-`lib/config.mjs` 의 `abs` 를 교체한다:
-
-```js
-import { homedir } from 'node:os';
-
-// … 기존 import 아래에 추가
-
-function expand(p) {
-  return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
-}
-```
-
-`abs` 를 이렇게 바꾼다:
-
-```js
-  const abs = (p) => (p ? resolve(root, expand(p)) : undefined);
-```
-
-그리고 반환 객체의 `state` 에 한 줄 더한다:
-
-```js
-      currentRoot: abs(raw.state?.currentRoot),
-```
-
-`test/config.test.mjs` 에 테스트를 더한다:
-
-```js
-test('~ 로 시작하는 경로를 홈 기준으로 편다', () => {
-  const dir = fixture({ map: 'AGENTS.md', state: { currentRoot: '~/Downloads/ref' }, checks: [] });
-  const cfg = loadConfig(dir);
-  assert.ok(cfg.state.currentRoot.startsWith(homedir()));
-  assert.ok(!cfg.state.currentRoot.includes('~'));
-});
-```
-
-⛔ `import { homedir } from 'node:os';` 를 테스트 파일 상단에도 추가한다.
-
-- [ ] **Step 6: 실패하는 state-check 테스트를 작성한다**
+- [x] **Step 6: 실패하는 state-check 테스트를 작성한다**
 
 `test/state-check.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
 import { hash12 } from '../lib/mdtable.mjs';
 import { auditState } from '../tools/state-check.mjs';
+import { target } from './scene.mjs';
 
+const STATE_CHECK = fileURLToPath(new URL('../tools/state-check.mjs', import.meta.url));
+const HEAD = '| 파일 | 상태 | 해시 |\n|---|---|---|\n';
+
+// 대장은 docs/ledger.md, 대장이 가리키는 원본은 ref/ 아래
 function scene(rows, files) {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
-  const refRoot = join(dir, 'ref');
-  mkdirSync(refRoot, { recursive: true });
-  for (const [rel, body] of Object.entries(files)) writeFileSync(join(refRoot, rel), body);
-  mkdirSync(join(dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(dir, 'docs/audit.md'),
-    ['| 파일 | 상태 | 해시 |', '|---|---|---|', ...rows].join('\n'),
-  );
-  writeFileSync(
-    join(dir, 'harness.json'),
-    JSON.stringify({ map: 'AGENTS.md', state: { current: 'docs/audit.md', currentRoot: 'ref' }, checks: [] }),
-  );
-  return dir;
+  const refs = Object.fromEntries(Object.entries(files).map(([k, v]) => [`ref/${k}`, v]));
+  return target({ state: { current: 'docs/ledger.md', currentRoot: 'ref' } }, { 'docs/ledger.md': HEAD + rows.join('\n'), ...refs });
 }
+const audit = (dir) => auditState(loadConfig(dir));
 
 test('해시가 맞으면 재작업 대상이 아니다', () => {
   const body = 'export const x = 1;\n';
-  const dir = scene([`| \`a.ts\` | 분석완료 | \`${hash12(Buffer.from(body))}\` |`], { 'a.ts': body });
-  const r = auditState(loadConfig(dir));
+  const r = audit(scene([`| \`a.ts\` | 분석완료 | \`${hash12(Buffer.from(body))}\` |`], { 'a.ts': body }));
   assert.deepEqual(r.stale, []);
   assert.deepEqual(r.missing, []);
+  assert.equal(r.integrityOk, true);
 });
 
-test('⭐ 해시가 다르면 재작업 대상으로 돌아온다', () => {
-  const dir = scene(['| `a.ts` | 분석완료 | `000000000000` |'], { 'a.ts': 'export const x = 2;\n' });
-  const r = auditState(loadConfig(dir));
-  assert.deepEqual(r.stale, ['a.ts']);
+test('⭐ 원본이 바뀌면 재작업 대상으로 돌아오고 현재 해시를 알려준다', () => {
+  const r = audit(scene(['| `a.ts` | 분석완료 | `000000000000` |'], { 'a.ts': 'x\n' }));
+  assert.deepEqual(r.stale, [{ target: 'a.ts', hash: hash12(Buffer.from('x\n')) }]);
 });
 
 test('⛔ 대장이 가리키는 파일이 사라지면 무결성 위반이다', () => {
-  const dir = scene(['| `gone.ts` | 분석완료 | `abc123abc123` |'], {});
-  const r = auditState(loadConfig(dir));
+  const r = audit(scene(['| `gone.ts` | 분석완료 | `abc123abc123` |'], {}));
   assert.deepEqual(r.missing, ['gone.ts']);
   assert.equal(r.integrityOk, false);
 });
 
-test('미분석은 재작업이 아니라 잔량이다', () => {
-  const dir = scene(['| `a.ts` | 미분석 | `` |'], { 'a.ts': 'x\n' });
-  const r = auditState(loadConfig(dir));
+test('미분석은 잔량이고, 해당없음은 파일이 없어도 어디에도 세지 않는다', () => {
+  const r = audit(scene(['| `a.ts` | 미분석 | `` |', '| `old.ts` | 해당없음 | `` |'], { 'a.ts': 'x\n' }));
   assert.deepEqual(r.stale, []);
+  assert.deepEqual(r.missing, []);
   assert.equal(r.remaining, 1);
+});
+
+test('currentRoot 가 없으면 대상 루트 기준이다', () => {
+  const dir = target({ state: { current: 'docs/ledger.md' } }, { 'docs/ledger.md': `${HEAD}| \`src/a.ts\` | 미분석 | \`\` |`, 'src/a.ts': 'x\n' });
+  assert.equal(audit(dir).remaining, 1);
+});
+
+test('CLI: 대장이 설정되지 않았으면 건너뛴다 (exit 0)', () => {
+  const r = spawnSync(process.execPath, [STATE_CHECK, target({})], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /건너뛴다/);
+});
+
+test('⛔ CLI: 무결성 위반은 exit 1 이다', () => {
+  const r = spawnSync(process.execPath, [STATE_CHECK, scene(['| `gone.ts` | 분석완료 | `abc123abc123` |'], {})], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /gone\.ts — 대장이 가리키는 파일이 없다/);
 });
 ```
 
-- [ ] **Step 7: 테스트가 실패하는지 확인한다**
+- [x] **Step 7: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/state-check.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/state-check.mjs'`
+Expected: FAIL — `Cannot find module '…/tools/state-check.mjs'`
 
-- [ ] **Step 8: `tools/state-check.mjs` 를 작성한다**
+- [x] **Step 8: `tools/state-check.mjs` 를 작성한다**
+
+`tools/state-check.mjs`:
 
 ```js
 #!/usr/bin/env node
-// ④ STATE — 진행 상태 대장이 거짓말하는지 본다. 검증됨 (ICFR referenceAudit).
-//
-// ⛔ 이것은 진행도 게이트이지 correctness 게이트가 아니다.
-// 무결성 위반(대장이 가리키는 파일 소멸)만 exit 1 이고, 재작업 대상·잔량은 보고만 한다.
-// 분석이 안 끝났다고 급한 수정을 막을 이유가 없다 — ICFR AGENTS.md 의 판단이다.
+// ④ STATE — 진행 상태 대장이 거짓말하는지 본다. 설계안.
+// ⛔ 진행도 게이트가 아니다: 무결성 위반(대장이 가리키는 파일 소멸)만 exit 1, 재작업·잔량은 보고만 한다.
 
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig } from '../lib/config.mjs';
+import { loadConfig, cli } from '../lib/config.mjs';
 import { parseAuditRows, hash12 } from '../lib/mdtable.mjs';
 
-const DONE = new Set(['분석완료', '부분분석']);
+const CLAIMED = new Set(['분석완료', '부분분석']);
 
 export function auditState(cfg) {
-  if (!cfg.state.current) throw new Error('harness.json 에 state.current 가 없다');
-  if (!cfg.state.currentRoot) throw new Error('harness.json 에 state.currentRoot 가 없다');
-
+  if (!cfg.state.current) throw new Error('.harness/harness.json 에 state.current 가 없다');
+  const base = cfg.state.currentRoot ?? cfg.root;
   const rows = parseAuditRows(readFileSync(cfg.state.current, 'utf8'));
-  if (rows.length === 0) throw new Error(`대장을 읽지 못했다: ${cfg.state.current}`);
+  if (rows.length === 0) throw new Error(`대장에서 행을 읽지 못했다: ${cfg.state.current}`);
 
   const stale = [];
   const missing = [];
   let remaining = 0;
-
   for (const r of rows) {
-    const path = join(cfg.state.currentRoot, r.target);
+    if (r.status === '해당없음') continue;
+    const path = join(base, r.target);
     if (!existsSync(path) || !statSync(path).isFile()) {
       missing.push(r.target);
       continue;
     }
-    if (!DONE.has(r.status)) {
+    if (!CLAIMED.has(r.status)) {
       remaining += 1;
       continue;
     }
-    if (hash12(readFileSync(path)) !== r.hash) stale.push(r.target);
+    const now = hash12(readFileSync(path));
+    if (now !== r.hash) stale.push({ target: r.target, hash: now });
   }
-
   return { total: rows.length, stale, missing, remaining, integrityOk: missing.length === 0 };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const r = auditState(loadConfig(process.argv[2] ?? process.cwd()));
+cli(import.meta.url, () => {
+  const cfg = loadConfig(process.argv[2] ?? process.cwd());
+  if (!cfg.state.current) {
+    console.log('대장이 없다 (.harness/harness.json 의 state.current) — 건너뛴다');
+    return;
+  }
+  const r = auditState(cfg);
   console.log(`대장 ${r.total}행 · 잔량 ${r.remaining} · 재작업 ${r.stale.length} · 소멸 ${r.missing.length}`);
-  for (const t of r.stale) console.log(`  ↻ ${t} — 원본이 바뀌었다`);
+  for (const s of r.stale) console.log(`  ↻ ${s.target} — 원본이 바뀌었다 (현재 해시 ${s.hash})`);
   for (const t of r.missing) console.log(`  ⛔ ${t} — 대장이 가리키는 파일이 없다`);
-  process.exit(r.integrityOk ? 0 : 1);
-}
+  if (!r.integrityOk) process.exit(1);
+});
 ```
 
-- [ ] **Step 9: 테스트가 통과하는지 확인한다**
+- [x] **Step 9: 테스트가 통과하는지 확인한다**
 
-Run: `node --test test/`
-Expected: PASS — 전체 `# fail 0`. `# pass` 가 Task 4 까지의 합보다 커졌는지 확인한다
+Run: `node --test test/mdtable.test.mjs test/state-check.test.mjs`
+Expected: PASS — `ℹ tests 12` · `ℹ pass 12` · `ℹ fail 0`
 
 - [ ] **Step 10: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
-git add lib/mdtable.mjs lib/config.mjs tools/state-check.mjs test/
+git add lib/mdtable.mjs tools/state-check.mjs templates/state/current.md test/mdtable.test.mjs test/state-check.test.mjs
 git commit -m "feat: 상태 대장 검사기 — 진행도를 대화가 아니라 파일이 기억한다
 
-ICFR 의 referenceAudit 을 스택 중립으로 옮긴다. 해시가 달라지면 그 행이
-자동으로 재작업 대상으로 돌아오는 것이 핵심이다 — 사람의 기억이 아니라
-결정적 검사가 판단한다.
+해시가 달라지면 그 행이 재작업 대상으로 돌아온다. 사람의 기억이 아니라
+결정적 검사가 판단하고, 대장을 고칠 수 있게 현재 해시를 알려준다.
 
-⛔ 무결성 위반(대장이 가리키는 파일 소멸)만 exit 1 이다. 재작업 대상과
-잔량은 보고만 한다. 진행도 게이트를 correctness 게이트로 쓰면 분석이 안
-끝났다고 급한 수정이 막힌다 — ICFR 이 referenceAudit 을 pre-push 에 안
-넣은 것과 같은 판단이다.
+⛔ 무결성 위반(대장이 가리키는 파일 소멸)만 exit 1 이다. 재작업과 잔량은
+보고만 한다 — 진행도 게이트로 쓰면 분석이 안 끝났다고 급한 수정이 막힌다.
 
-표 파서가 상태 값 설명표를 데이터로 오인하지 않는지 테스트가 지킨다.
-대장 파일 안에 표가 여러 개 있다."
+해시는 CRLF 를 LF 로 맞춰 잰다. 같은 파일이 OS 마다 다른 줄바꿈으로
+체크아웃되면 그것만으로 전 행이 재작업 대상이 된다. 해당없음 행은
+파일이 사라져도 세지 않는다."
 ```
 
 ---
 
-### Task 6: 결정 적립 검사기 `decision-check.mjs`
+### Task 5: 결정 적립 검사기 `decision-check.mjs`
 
 **Files:**
-- Create: `tools/decision-check.mjs`
-- Create: `templates/state/decisions.md`
+- Create: `tools/decision-check.mjs` · `templates/state/decisions.md`
 - Test: `test/decision-check.test.mjs`
 
 **Interfaces:**
-- Consumes: `loadConfig` (Task 1)
-- Produces: `auditDecisions(cfg, today: Date) → { open: Array<{id, title}>, staleDays: number|null, warn: boolean }` — `today` 를 인자로 받는 이유는 테스트가 시계에 묶이지 않게 하기 위함이다
+- Consumes: `loadConfig` · `cli` (Task 1)
+- Produces: `auditDecisions(cfg, today: Date) → { open: Array<{ id, title }>, staleDays: number | null, warn: boolean }` · `STALE_DAYS = 14`
 
-ICFR `Need-Check.md` 실측 형식 — `| 갱신일 | 2026-09-23 |` 머리표 + `## Q1 · <제목>` 절.
+형식: `| 갱신일 | YYYY-MM-DD |` 머리표 + `# 1.` 절 아래의 `## Q<번호> · <제목>` 이 열린 질문이다. `# 2.` · `# 3.` 아래는 세지 않는다.
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 장부 템플릿을 만든다**
+
+`templates/state/decisions.md`:
+
+```markdown
+# 확인 필요 사항
+
+> 상태: **설계안**
+
+에이전트가 승인된 계획을 실행하면서 **묻지 않고 가정으로 넘어간 것들.**
+
+| | |
+|---|---|
+| 갱신일 | YYYY-MM-DD |
+
+**읽는 법** — **1절만 답해주시면 됩니다.** 2절은 알려드리는 것, 3절은 닫힌 것입니다.
+
+⛔ 절 번호 `# 1.` · `# 2.` · `# 3.` 과 `## Q<번호> · <제목>` 형식을 바꾸지 않는다 — `decision-check` 가 이것으로 연다.
+항목을 더하거나 옮길 때마다 갱신일을 바꾼다.
+
+> 1절에 이렇게 적는다:
+>
+> `## Q1 · 결제 실패 시 재시도 횟수를 3회로 가정했다 — 맞나요?`
+>
+> 되돌리기 **지금 싸다 / 중간 / 없음** · **무엇이 다른가** · **왜 문제가 되나** · **내가 그렇게 한 이유** · **내 의견**
+
+---
+
+# 1. 답변이 필요합니다
+
+# 2. 알려드립니다 — 답변 없어도 진행됩니다
+
+# 3. 해소된 것
+```
+
+- [x] **Step 2: 실패하는 테스트를 작성한다**
 
 `test/decision-check.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
 import { auditDecisions } from '../tools/decision-check.mjs';
+import { target, repoFile } from './scene.mjs';
 
-function scene(body) {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
-  writeFileSync(join(dir, 'Need-Check.md'), body);
-  writeFileSync(
-    join(dir, 'harness.json'),
-    JSON.stringify({ map: 'AGENTS.md', state: { decisions: 'Need-Check.md' }, checks: [] }),
-  );
-  return dir;
-}
+const DECISION_CHECK = fileURLToPath(new URL('../tools/decision-check.mjs', import.meta.url));
 
 const BODY = [
   '# 확인 필요 사항',
@@ -1021,1469 +1178,841 @@ const BODY = [
   '',
   '# 1. 답변이 필요합니다',
   '',
-  '## Q1 · 제출본이 증빙 목록을 고정해야 하나요?',
+  '## Q1 · 결제 실패 시 재시도를 3회로 가정했다',
   '내용',
-  '## Q2 · 레퍼런스 계약 72개를 구현하지 않은 판단이 맞나요?',
+  '## Q2 · 관리자 화면을 이번 범위에서 뺐다',
   '내용',
   '',
   '# 3. 해소된 것',
   '',
-  '## 표본 알고리즘 레퍼런스 대조 · 2026-09-23',
+  '## Q0 · 로그 보관 기간 · 2026-09-20',
 ].join('\n');
 
-test('1절의 Q 항목만 열린 것으로 센다', () => {
-  const r = auditDecisions(loadConfig(scene(BODY)), new Date('2026-09-28'));
-  assert.equal(r.open.length, 2);
-  assert.equal(r.open[0].id, 'Q1');
-});
+const scene = (body) => target({ state: { decisions: 'docs/decisions.md' } }, { 'docs/decisions.md': body });
+const audit = (body, today) => auditDecisions(loadConfig(scene(body)), new Date(today));
 
-test('⛔ 3절(해소된 것)을 열린 것으로 세지 않는다', () => {
-  const r = auditDecisions(loadConfig(scene(BODY)), new Date('2026-09-28'));
-  assert.ok(!r.open.some((q) => q.title.includes('표본 알고리즘')));
+test('1절의 Q 항목만 열린 것으로 센다 — 3절(해소된 것)은 세지 않는다', () => {
+  assert.deepEqual(audit(BODY, '2026-09-28').open, [
+    { id: 'Q1', title: '결제 실패 시 재시도를 3회로 가정했다' },
+    { id: 'Q2', title: '관리자 화면을 이번 범위에서 뺐다' },
+  ]);
 });
 
 test('갱신일로부터 경과일을 센다', () => {
-  const r = auditDecisions(loadConfig(scene(BODY)), new Date('2026-09-28'));
+  const r = audit(BODY, '2026-09-28');
   assert.equal(r.staleDays, 5);
   assert.equal(r.warn, false);
 });
 
-test('⭐ 임계(14일)를 넘기면 경고한다', () => {
-  const r = auditDecisions(loadConfig(scene(BODY)), new Date('2026-10-20'));
-  assert.equal(r.warn, true);
+test('⭐ 열린 질문이 있고 14일을 넘기면 경고한다', () => {
+  assert.equal(audit(BODY, '2026-10-20').warn, true);
 });
 
 test('열린 질문이 없으면 오래돼도 경고하지 않는다', () => {
   const body = ['| 갱신일 | 2026-01-01 |', '# 1. 답변이 필요합니다', '', '# 3. 해소된 것'].join('\n');
-  const r = auditDecisions(loadConfig(scene(body)), new Date('2026-10-20'));
-  assert.equal(r.warn, false);
+  assert.equal(audit(body, '2026-10-20').warn, false);
+});
+
+test('CRLF 파일도 같게 읽는다', () => {
+  assert.deepEqual(audit(BODY.replace(/\n/g, '\r\n'), '2026-09-28'), audit(BODY, '2026-09-28'));
+});
+
+test('⛔ 설치 템플릿에는 열린 질문이 없다 — 예시가 질문으로 세지면 설치 직후부터 거짓 경고다', () => {
+  const r = audit(repoFile('templates/state/decisions.md'), '2026-10-02');
+  assert.deepEqual(r.open, []);
+  assert.equal(r.staleDays, null);
+});
+
+test('CLI: 경고가 있어도 exit 0 이다 — 답을 기다리는 것은 결함이 아니다', () => {
+  // CLI 는 실제 오늘 날짜를 쓴다 — 갱신일을 오늘 기준으로 묵힌다
+  const old = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const r = spawnSync(process.execPath, [DECISION_CHECK, scene(BODY.replace('2026-09-23', old))], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /열린 결정 2건/);
+  assert.match(r.stdout, /⚠️/);
+});
+
+test('CLI: 장부가 설정되지 않았으면 건너뛴다', () => {
+  const r = spawnSync(process.execPath, [DECISION_CHECK, target({})], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /건너뛴다/);
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
+- [x] **Step 3: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/decision-check.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/decision-check.mjs'`
+Expected: FAIL — `Cannot find module '…/tools/decision-check.mjs'`
 
-- [ ] **Step 3: `tools/decision-check.mjs` 를 작성한다**
+- [x] **Step 4: `tools/decision-check.mjs` 를 작성한다**
+
+`tools/decision-check.mjs`:
 
 ```js
 #!/usr/bin/env node
-// ④ DECISIONS — 묻지 않고 넘어간 가정이 답 없이 묵고 있는지 본다. 검증됨 (ICFR Need-Check.md).
-//
-// ⛔ 절대 exit 1 하지 않는다. 답을 기다리는 것은 결함이 아니다.
-// 「검사는 드물게 울려야 신호다」 — 경고는 임계를 넘겼을 때만 낸다.
+// ④ DECISIONS — 묻지 않고 넘어간 가정이 답 없이 묵고 있는지 본다. 설계안.
+// ⛔ exit 1 하지 않는다 — 답을 기다리는 것은 결함이 아니다. 경고는 임계를 넘겼을 때만 낸다.
 
 import { readFileSync } from 'node:fs';
-import { loadConfig } from '../lib/config.mjs';
+import { loadConfig, cli } from '../lib/config.mjs';
 
 export const STALE_DAYS = 14;
 
 export function auditDecisions(cfg, today = new Date()) {
-  if (!cfg.state.decisions) throw new Error('harness.json 에 state.decisions 가 없다');
+  if (!cfg.state.decisions) throw new Error('.harness/harness.json 에 state.decisions 가 없다');
   const text = readFileSync(cfg.state.decisions, 'utf8');
-
   const updated = text.match(/\|\s*갱신일\s*\|\s*(\d{4}-\d{2}-\d{2})\s*\|/);
   const open = [];
-  let inOpenSection = false;
-
-  for (const line of text.split('\n')) {
-    const h1 = line.match(/^#\s+(\d)\./);
+  let inOpen = false;
+  for (const line of text.split(/\r?\n/)) {
+    const h1 = line.match(/^#\s+(\d+)\./);
     if (h1) {
-      inOpenSection = h1[1] === '1';
+      inOpen = h1[1] === '1';
       continue;
     }
-    if (!inOpenSection) continue;
-    const q = line.match(/^##\s+(Q\d+)\s*·\s*(.+?)\s*$/);
+    const q = inOpen && line.match(/^##\s+(Q\d+)\s*·\s*(.+?)\s*$/);
     if (q) open.push({ id: q[1], title: q[2] });
   }
-
-  const staleDays = updated
-    ? Math.round((today - new Date(updated[1])) / 86400000)
-    : null;
-
+  const staleDays = updated ? Math.round((today - new Date(updated[1])) / 86400000) : null;
   return { open, staleDays, warn: open.length > 0 && staleDays !== null && staleDays > STALE_DAYS };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const r = auditDecisions(loadConfig(process.argv[2] ?? process.cwd()));
+cli(import.meta.url, () => {
+  const cfg = loadConfig(process.argv[2] ?? process.cwd());
+  if (!cfg.state.decisions) {
+    console.log('가정 장부가 없다 (.harness/harness.json 의 state.decisions) — 건너뛴다');
+    return;
+  }
+  const r = auditDecisions(cfg);
   console.log(`열린 결정 ${r.open.length}건 · 갱신 후 ${r.staleDays ?? '?'}일`);
   for (const q of r.open) console.log(`  · ${q.id} ${q.title}`);
-  if (r.warn) console.log(`⚠️ ${STALE_DAYS}일을 넘겼다 — 되돌리기 비용이 오르고 있다`);
-}
+  if (r.warn) console.log(`⚠️ ${STALE_DAYS}일을 넘겼다 — 되돌리기 비용이 오르고 있다. 사용자에게 1절을 보여준다`);
+});
 ```
 
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
+- [x] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/decision-check.test.mjs`
-Expected: PASS — `# pass 5` · `# fail 0`
-
-- [ ] **Step 5: `templates/state/decisions.md` 를 작성한다**
-
-```markdown
-# 확인 필요 사항
-
-에이전트가 루프로 구현하면서 **묻지 않고 가정으로 넘어간 것들.**
-
-| | |
-|---|---|
-| 갱신일 | YYYY-MM-DD |
-
-**읽는 법** — **1절만 답해주시면 됩니다.** 2절은 알려드리는 것, 3절은 닫힌 것입니다.
-
----
-
-# 1. 답변이 필요합니다
-
-위에서부터 급합니다. **급하다 = 지금 바꾸면 싸고 미루면 비싸진다**는 뜻입니다.
-
-## Q1 · <질문 한 줄>
-
-> 되돌리기 **<지금 싸다 / 중간 / 없음>** · 관련 <근거 문서>
-
-**무엇이 다른가** · **왜 문제가 되나** · **내가 그렇게 한 이유** · **내 의견**
-
----
-
-# 2. 알려드립니다 — 답변 없어도 진행됩니다
-
-# 3. 해소된 것
-```
-
-⛔ **절 번호 `# 1.` · `# 2.` · `# 3.` 을 바꾸지 않는다.** `decision-check.mjs` 가 이것으로 열린 질문을 가른다.
+Expected: PASS — `ℹ tests 8` · `ℹ pass 8` · `ℹ fail 0`
 
 - [ ] **Step 6: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
 git add tools/decision-check.mjs templates/state/decisions.md test/decision-check.test.mjs
 git commit -m "feat: 결정 적립 검사기 — 가정이 답 없이 묵는 것을 잰다
 
-자율 루프는 묻지 않고 진행하는 대신 가정을 적립한다. 적립만 하고 아무도
-안 보면 되돌리기 비용이 조용히 오른다 — ICFR 은 Q1~Q4 가 5일째 열려
-있었고 그중 Q3(증빙 저장 위치)은 '파일이 쌓이면 이관 스크립트 필요'로
-명시돼 있었다.
+승인된 계획을 실행하는 동안에는 묻지 않고 가정을 적립한다. 적립만 하고
+아무도 안 보면 되돌리기 비용이 조용히 오른다.
 
 ⛔ exit 1 하지 않는다. 답을 기다리는 것은 결함이 아니다. 14일 임계를
 넘긴 열린 질문이 있을 때만 경고한다.
 
-3절(해소된 것)의 ## 절을 열린 질문으로 오인하지 않는지 테스트가 지킨다."
+설치 템플릿의 형식 예시는 인용문 안에 둔다. 예시가 1절의 질문으로
+세지면 설치 직후부터 거짓 경고가 뜬다 — 테스트가 템플릿을 직접 읽어
+지킨다."
 ```
 
 ---
 
-### Task 7: LESSONS 입구 `lesson-append.mjs`
+### Task 6: LESSONS 입구 `lesson-append.mjs`
 
 **Files:**
-- Create: `tools/lesson-append.mjs`
-- Create: `templates/state/lessons.md`
+- Create: `tools/lesson-append.mjs` · `templates/state/lessons.md`
 - Test: `test/lesson-append.test.mjs`
 
 **Interfaces:**
-- Consumes: `loadConfig` (Task 1)
-- Produces: `appendLesson(cfg, entry) → { id: string }` · CLI `node tools/lesson-append.mjs <<< '<JSON>'`
-  - `entry: { symptom: string, cause: string, category: string, guard?: string }`
-  - `CATEGORIES = ['누락된 컨텍스트', '잘못된 도구', '미흡한 권한', '검증 부족']` (아티클 ⑥의 분류)
+- Consumes: `loadConfig` · `cli` (Task 1) · `cells` (Task 4)
+- Produces:
+  - `appendLesson(cfg, entry: { symptom, cause, category, guard? }) → { id: string }` — id 는 `L001` 부터
+  - `CATEGORIES = ['누락된 컨텍스트', '잘못된 도구', '미흡한 권한', '검증 부족']` · `NO_GUARD = '⛔ 아직 없다'`
+  - CLI `node .harness/tools/lesson-append.mjs [대상] <<< '<JSON>'`
 
-⭐ **이 레포가 새로 만드는 유일한 것.** ICFR 에서 승격은 3번 일어났지만 입구가 없었다.
+- [x] **Step 1: 교훈 템플릿을 만든다**
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+`templates/state/lessons.md`:
+
+```markdown
+# 교훈
+
+> 상태: **설계안**
+
+반복된 실패를 **규약으로 올리기 위한 입구.** 증상만 적는 것은 일기다 — 근본 원인과 「무엇이 막는가」가 있어야 교훈이다.
+
+| | |
+|---|---|
+| 입력 | `node .harness/tools/lesson-append.mjs <<< '<JSON>'` |
+| 승격 후보 | `node .harness/tools/lesson-promote.mjs` |
+
+분류: `누락된 컨텍스트` · `잘못된 도구` · `미흡한 권한` · `검증 부족`
+
+⛔ 이 표가 파일의 마지막이다 — 도구가 끝에 행을 덧붙인다.
+
+| id | 분류 | 증상 | 근본 원인 | 무엇이 막는가 |
+|---|---|---|---|---|
+```
+
+- [x] **Step 2: 실패하는 테스트를 작성한다**
 
 `test/lesson-append.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
-import { appendLesson } from '../tools/lesson-append.mjs';
+import { cells } from '../lib/mdtable.mjs';
+import { appendLesson, NO_GUARD } from '../tools/lesson-append.mjs';
+import { target, repoFile } from './scene.mjs';
 
-function scene() {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
-  writeFileSync(join(dir, 'lessons.md'), '# 교훈\n\n| id | 분류 | 증상 | 근본 원인 | 무엇이 막는가 |\n|---|---|---|---|---|\n');
-  writeFileSync(
-    join(dir, 'harness.json'),
-    JSON.stringify({ map: 'AGENTS.md', state: { lessons: 'lessons.md' }, checks: [] }),
-  );
-  return dir;
-}
-
+const APPEND = fileURLToPath(new URL('../tools/lesson-append.mjs', import.meta.url));
+const scene = () => target({ state: { lessons: 'docs/lessons.md' } }, { 'docs/lessons.md': repoFile('templates/state/lessons.md') });
 const OK = {
-  symptom: 'sed 치환이 아무것도 안 바꿨는데 커밋됐다',
-  cause: '앵커 문자열이 파일에 없었다',
+  symptom: '치환 명령이 아무것도 안 바꿨는데 커밋됐다',
+  cause: '찾는 문자열이 파일에 없었고 치환은 실패를 알리지 않는다',
   category: '검증 부족',
-  guard: 'AGENTS.md §4',
+  guard: '',
 };
+const lastRow = (cfg) => readFileSync(cfg.state.lessons, 'utf8').trimEnd().split(/\r?\n/).at(-1);
 
-test('교훈 한 건을 표에 덧붙인다', () => {
-  const dir = scene();
-  const cfg = loadConfig(dir);
-  appendLesson(cfg, OK);
-  const text = readFileSync(cfg.state.lessons, 'utf8');
-  assert.match(text, /sed 치환이 아무것도/);
-  assert.match(text, /검증 부족/);
-});
-
-test('id 를 부여하고 돌려준다', () => {
+test('설치 템플릿의 표에 교훈 한 건을 덧붙이고 id 를 돌려준다', () => {
   const cfg = loadConfig(scene());
-  const { id } = appendLesson(cfg, OK);
-  assert.match(id, /^L\d{3}$/);
-  assert.match(readFileSync(cfg.state.lessons, 'utf8'), new RegExp(id));
+  assert.deepEqual(appendLesson(cfg, OK), { id: 'L001' });
+  assert.deepEqual(cells(lastRow(cfg)), ['L001', '검증 부족', OK.symptom, OK.cause, NO_GUARD]);
 });
 
 test('id 가 증가한다', () => {
   const cfg = loadConfig(scene());
-  assert.equal(appendLesson(cfg, OK).id, 'L001');
+  appendLesson(cfg, OK);
   assert.equal(appendLesson(cfg, OK).id, 'L002');
 });
 
-test('⛔ 분류가 네 가지 밖이면 거부한다', () => {
+test('막는 것을 적으면 그대로 남는다', () => {
   const cfg = loadConfig(scene());
-  assert.throws(() => appendLesson(cfg, { ...OK, category: '그냥 실수' }), /알 수 없는 분류/);
+  appendLesson(cfg, { ...OK, guard: '.claude/rules/edits.md' });
+  assert.equal(cells(lastRow(cfg))[4], '.claude/rules/edits.md');
+});
+
+test('⛔ 분류가 네 가지 밖이면 거부한다', () => {
+  assert.throws(() => appendLesson(loadConfig(scene()), { ...OK, category: '그냥 실수' }), /알 수 없는 분류/);
 });
 
 test('⛔ 근본 원인이 비면 거부한다 — 증상만 적는 것은 일기다', () => {
-  const cfg = loadConfig(scene());
-  assert.throws(() => appendLesson(cfg, { ...OK, cause: '' }), /근본 원인/);
+  assert.throws(() => appendLesson(loadConfig(scene()), { ...OK, cause: '  ' }), /근본 원인/);
 });
 
-test('표 구분자(|)가 값에 들어가도 표가 깨지지 않는다', () => {
+test('값에 | 와 줄바꿈이 들어가도 표가 깨지지 않는다', () => {
   const cfg = loadConfig(scene());
-  appendLesson(cfg, { ...OK, symptom: 'a | b' });
-  const row = readFileSync(cfg.state.lessons, 'utf8').split('\n').at(-2);
-  assert.equal(row.split('|').length - 2, 5, '칸이 5개여야 한다');
+  appendLesson(cfg, { ...OK, symptom: 'a | b\nc' });
+  assert.equal(cells(lastRow(cfg)).length, 5);
+});
+
+test('CLI: 표준입력의 JSON 을 기록한다', () => {
+  const r = spawnSync(process.execPath, [APPEND, scene()], { input: JSON.stringify(OK), encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /기록: L001/);
+});
+
+test('⛔ CLI: 거부하면 이유와 함께 exit 1 이다', () => {
+  const r = spawnSync(process.execPath, [APPEND, scene()], { input: JSON.stringify({ ...OK, cause: '' }), encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /근본 원인/);
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
+- [x] **Step 3: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/lesson-append.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/lesson-append.mjs'`
+Expected: FAIL — `Cannot find module '…/tools/lesson-append.mjs'`
 
-- [ ] **Step 3: `tools/lesson-append.mjs` 를 작성한다**
+- [x] **Step 4: `tools/lesson-append.mjs` 를 작성한다**
+
+`tools/lesson-append.mjs`:
 
 ```js
 #!/usr/bin/env node
-// ④ LESSONS — ⭐ 이 레포가 새로 만드는 유일한 것. 설계안.
-//
-// 반복 실패를 규약으로 승격시키려면 입구가 있어야 한다. ICFR 에서 승격은
-// 세 번 일어났지만(sed 앵커 → AGENTS.md §4, Boot 4 자동설정 → §3,
-// DTO 이름 충돌 → §8) 전부 손으로였고 기록이 남지 않았다.
-//
-// ⛔ 자동 추출하지 않는다. 검증 관문 없는 자동 기록은 낡은 정보를 더 빨리 쌓는다.
+// ④ LESSONS 입구 — 반복 실패를 규약으로 올리려면 입구가 있어야 한다. 설계안.
+// ⛔ 자동 추출하지 않는다. 판단을 거친 한 건을 근본 원인과 함께 적는다.
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { loadConfig } from '../lib/config.mjs';
+import { loadConfig, cli } from '../lib/config.mjs';
 
 export const CATEGORIES = ['누락된 컨텍스트', '잘못된 도구', '미흡한 권한', '검증 부족'];
+export const NO_GUARD = '⛔ 아직 없다';
 
-const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ').trim();
+const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
 
 export function appendLesson(cfg, entry) {
-  if (!cfg.state.lessons) throw new Error('harness.json 에 state.lessons 가 없다');
+  if (!cfg.state.lessons) throw new Error('.harness/harness.json 에 state.lessons 가 없다');
   if (!CATEGORIES.includes(entry.category)) {
     throw new Error(`알 수 없는 분류: ${entry.category}\n  쓸 수 있는 것: ${CATEGORIES.join(' · ')}`);
   }
-  if (!String(entry.symptom ?? '').trim()) throw new Error('증상이 비었다');
-  if (!String(entry.cause ?? '').trim()) {
-    throw new Error('근본 원인이 비었다 — 증상만 적는 것은 일기이지 교훈이 아니다');
-  }
+  if (!cell(entry.symptom)) throw new Error('증상이 비었다');
+  if (!cell(entry.cause)) throw new Error('근본 원인이 비었다 — 증상만 적는 것은 일기이지 교훈이 아니다');
 
   const text = readFileSync(cfg.state.lessons, 'utf8');
-  const used = [...text.matchAll(/^\|\s*(L\d{3})\s*\|/gm)].map((m) => Number(m[1].slice(1)));
+  const used = [...text.matchAll(/^\|\s*L(\d+)\s*\|/gm)].map((m) => Number(m[1]));
   const id = `L${String(Math.max(0, ...used) + 1).padStart(3, '0')}`;
-
-  const row = `| ${id} | ${cell(entry.category)} | ${cell(entry.symptom)} | ${cell(entry.cause)} | ${cell(entry.guard) || '⛔ 아직 없다'} |\n`;
-  writeFileSync(cfg.state.lessons, text.endsWith('\n') ? text + row : `${text}\n${row}`);
+  const row = `| ${id} | ${entry.category} | ${cell(entry.symptom)} | ${cell(entry.cause)} | ${cell(entry.guard) || NO_GUARD} |`;
+  writeFileSync(cfg.state.lessons, `${text.trimEnd()}\n${row}\n`);
   return { id };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const entry = JSON.parse(readFileSync(0, 'utf8'));
-  const { id } = appendLesson(loadConfig(process.cwd()), entry);
+cli(import.meta.url, () => {
+  const { id } = appendLesson(loadConfig(process.argv[2] ?? process.cwd()), JSON.parse(readFileSync(0, 'utf8')));
   console.log(`기록: ${id}`);
-}
+});
 ```
 
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
+- [x] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/lesson-append.test.mjs`
-Expected: PASS — `# pass 6` · `# fail 0`
-
-- [ ] **Step 5: `templates/state/lessons.md` 를 작성한다**
-
-```markdown
-# 교훈
-
-반복된 실패를 **규약으로 승격시키기 위한 입구.** 증상만 적는 것은 일기다 — 근본 원인과
-「이제 무엇이 막는가」가 있어야 교훈이다.
-
-| | |
-|---|---|
-| 입력 | `node tools/lesson-append.mjs <<< '<JSON>'` |
-| 승격 후보 | `node tools/lesson-promote.mjs` |
-
-## 분류 — 아티클 ⑥의 실패 원인 4종
-
-`누락된 컨텍스트` · `잘못된 도구` · `미흡한 권한` · `검증 부족`
-
-## 기록
-
-| id | 분류 | 증상 | 근본 원인 | 무엇이 막는가 |
-|---|---|---|---|---|
-```
+Expected: PASS — `ℹ tests 8` · `ℹ pass 8` · `ℹ fail 0`
 
 - [ ] **Step 6: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
 git add tools/lesson-append.mjs templates/state/lessons.md test/lesson-append.test.mjs
 git commit -m "feat: LESSONS 입구 — 반복 실패를 규약으로 올리는 자리
 
-아티클 ④의 네 번째 메모리 유형이자 ICFR 에 유일하게 없던 것이다. 승격
-경로 자체는 이미 작동했다 — sed 앵커 사고 2회가 AGENTS.md §4 가 됐고,
-Boot 4 자동설정 침묵이 §3 음성 케이스가 됐고, DTO 이름 충돌이 §8 이
-됐다. 입구가 없어서 전부 손으로 일어났고 중간 기록이 남지 않았다.
+superpowers 에도 Claude Code 에도 없는 것이다. 같은 실패가 반복되면
+규약이 돼야 하는데 입구가 없으면 승격은 손으로만, 기록 없이 일어난다.
 
-⛔ 근본 원인이 비면 거부한다. 증상만 쌓이면 일기가 되고, 일기는 승격
-판정의 근거가 못 된다.
+⛔ 근본 원인이 비면 거부한다. 증상만 쌓이면 일기가 되고 일기는 승격
+판정의 근거가 못 된다. 분류는 넷으로 닫는다.
 
-⛔ 자동 추출하지 않는다. 검증 관문 없는 자동 기록은 낡은 정보를 더 빨리
-쌓을 뿐이라는 context-graph 의 결론을 따른다."
+테스트가 설치 템플릿 위에 직접 덧붙여 템플릿과 도구의 표 형식이
+어긋나지 않게 지킨다."
 ```
 
 ---
 
-### Task 8: 승격 후보 `lesson-promote.mjs`
+### Task 7: 승격 후보 `lesson-promote.mjs`
 
 **Files:**
 - Create: `tools/lesson-promote.mjs`
 - Test: `test/lesson-promote.test.mjs`
 
 **Interfaces:**
-- Consumes: `loadConfig` (Task 1) · `lessons.md` 표 형식 (Task 7)
-- Produces: `promotionCandidates(cfg, threshold = 2) → Array<{ category, count, ids: string[] }>`
+- Consumes: `loadConfig` · `cli` (Task 1) · `cells` (Task 4) · `appendLesson` · `NO_GUARD` (Task 6)
+- Produces: `promotionCandidates(cfg, threshold = 2) → Array<{ category, count, ids: string[] }>` — 많은 순
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 `test/lesson-promote.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
+import { appendLesson } from '../tools/lesson-append.mjs';
 import { promotionCandidates } from '../tools/lesson-promote.mjs';
+import { target, repoFile } from './scene.mjs';
 
-function scene(rows) {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-'));
-  writeFileSync(
-    join(dir, 'lessons.md'),
-    ['| id | 분류 | 증상 | 근본 원인 | 무엇이 막는가 |', '|---|---|---|---|---|', ...rows].join('\n'),
-  );
-  writeFileSync(
-    join(dir, 'harness.json'),
-    JSON.stringify({ map: 'AGENTS.md', state: { lessons: 'lessons.md' }, checks: [] }),
-  );
-  return loadConfig(dir);
-}
+const PROMOTE = fileURLToPath(new URL('../tools/lesson-promote.mjs', import.meta.url));
+const HEAD = '| id | 분류 | 증상 | 근본 원인 | 무엇이 막는가 |\n|---|---|---|---|---|\n';
+const scene = (rows) => target({ state: { lessons: 'l.md' } }, { 'l.md': HEAD + rows.join('\n') });
+const cands = (rows) => promotionCandidates(loadConfig(scene(rows)), 2);
 
-test('같은 분류가 임계 이상이면 후보다', () => {
-  const cfg = scene([
-    '| L001 | 검증 부족 | a | b | ⛔ 아직 없다 |',
-    '| L002 | 검증 부족 | c | d | ⛔ 아직 없다 |',
+test('같은 분류가 임계 이상이고 막는 것이 없으면 후보다', () => {
+  assert.deepEqual(cands(['| L001 | 검증 부족 | a | b | ⛔ 아직 없다 |', '| L002 | 검증 부족 | c | d | ⛔ 아직 없다 |']), [
+    { category: '검증 부족', count: 2, ids: ['L001', 'L002'] },
   ]);
-  const r = promotionCandidates(cfg, 2);
-  assert.equal(r.length, 1);
-  assert.equal(r[0].category, '검증 부족');
-  assert.deepEqual(r[0].ids, ['L001', 'L002']);
 });
 
 test('임계 미만은 후보가 아니다', () => {
-  const cfg = scene(['| L001 | 검증 부족 | a | b | ⛔ 아직 없다 |']);
-  assert.deepEqual(promotionCandidates(cfg, 2), []);
+  assert.deepEqual(cands(['| L001 | 검증 부족 | a | b | ⛔ 아직 없다 |']), []);
 });
 
 test('⭐ 이미 막는 것이 있는 항목은 세지 않는다 — 승격이 끝난 것이다', () => {
-  const cfg = scene([
-    '| L001 | 검증 부족 | a | b | AGENTS.md §4 |',
-    '| L002 | 검증 부족 | c | d | ⛔ 아직 없다 |',
-  ]);
-  assert.deepEqual(promotionCandidates(cfg, 2), []);
+  assert.deepEqual(cands(['| L001 | 검증 부족 | a | b | .claude/rules/edits.md |', '| L002 | 검증 부족 | c | d | ⛔ 아직 없다 |']), []);
 });
 
 test('분류가 섞여 있으면 각각 센다', () => {
-  const cfg = scene([
+  const r = cands([
     '| L001 | 검증 부족 | a | b | ⛔ 아직 없다 |',
     '| L002 | 잘못된 도구 | c | d | ⛔ 아직 없다 |',
     '| L003 | 잘못된 도구 | e | f | ⛔ 아직 없다 |',
   ]);
-  const r = promotionCandidates(cfg, 2);
-  assert.equal(r.length, 1);
-  assert.equal(r[0].category, '잘못된 도구');
+  assert.deepEqual(r.map((c) => c.category), ['잘못된 도구']);
+});
+
+test('값 안의 \\| 가 있어도 「무엇이 막는가」 칸을 읽는다', () => {
+  assert.deepEqual(cands(['| L001 | 검증 부족 | a \\| b | c | ⛔ 아직 없다 |', '| L002 | 검증 부족 | d | e | ⛔ 아직 없다 |'])[0].count, 2);
+});
+
+test('⭐ lesson-append 가 쓴 행을 그대로 읽는다', () => {
+  const cfg = loadConfig(target({ state: { lessons: 'l.md' } }, { 'l.md': repoFile('templates/state/lessons.md') }));
+  for (const symptom of ['치환이 아무것도 안 바꿨다', '생성 스크립트가 빈 파일을 썼다']) {
+    appendLesson(cfg, { symptom, cause: '실패를 알리지 않는 명령의 결과를 확인하지 않았다', category: '검증 부족' });
+  }
+  assert.deepEqual(promotionCandidates(cfg), [{ category: '검증 부족', count: 2, ids: ['L001', 'L002'] }]);
+});
+
+test('CLI: 후보가 없으면 그렇게 말하고 exit 0 이다', () => {
+  const r = spawnSync(process.execPath, [PROMOTE, scene([])], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /승격 후보 없음/);
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
+- [x] **Step 2: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/lesson-promote.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/lesson-promote.mjs'`
+Expected: FAIL — `Cannot find module '…/tools/lesson-promote.mjs'`
 
-- [ ] **Step 3: `tools/lesson-promote.mjs` 를 작성한다**
+- [x] **Step 3: `tools/lesson-promote.mjs` 를 작성한다**
+
+`tools/lesson-promote.mjs`:
 
 ```js
 #!/usr/bin/env node
-// ④ LESSONS 승격 후보. 설계안.
-//
-// ⛔ 승격을 자동으로 하지 않는다. 후보만 올리고 규약을 고치는 것은 사람이다.
-// ⛔ exit 1 하지 않는다 — 후보가 있는 것은 결함이 아니다.
+// ④ LESSONS 승격 후보 — 같은 분류가 반복됐고 아직 막는 것이 없으면 올린다. 설계안.
+// ⛔ 승격은 자동으로 하지 않는다 — 규약을 고치는 것은 사람의 판단이다. exit 0 고정.
 
 import { readFileSync } from 'node:fs';
-import { loadConfig } from '../lib/config.mjs';
-
-const ROW = /^\|\s*(L\d{3})\s*\|\s*([^|]+?)\s*\|[^|]*\|[^|]*\|\s*([^|]*?)\s*\|/;
-const NO_GUARD = '⛔ 아직 없다';
+import { loadConfig, cli } from '../lib/config.mjs';
+import { cells } from '../lib/mdtable.mjs';
+import { NO_GUARD } from './lesson-append.mjs';
 
 export function promotionCandidates(cfg, threshold = 2) {
-  if (!cfg.state.lessons) throw new Error('harness.json 에 state.lessons 가 없다');
+  if (!cfg.state.lessons) throw new Error('.harness/harness.json 에 state.lessons 가 없다');
   const byCategory = new Map();
-
-  for (const line of readFileSync(cfg.state.lessons, 'utf8').split('\n')) {
-    const m = ROW.exec(line);
-    if (!m) continue;
-    const [, id, category, guard] = m;
-    if (guard !== NO_GUARD) continue; // 이미 막는 것이 있으면 승격이 끝났다
-    if (!byCategory.has(category)) byCategory.set(category, []);
-    byCategory.get(category).push(id);
+  for (const line of readFileSync(cfg.state.lessons, 'utf8').split(/\r?\n/)) {
+    const c = cells(line);
+    if (!c || c.length < 5 || !/^L\d+$/.test(c[0])) continue;
+    const [id, category, , , guard] = c;
+    if (guard !== NO_GUARD) continue; // 막는 것이 생겼으면 승격이 끝났다
+    byCategory.set(category, [...(byCategory.get(category) ?? []), id]);
   }
-
-  return [...byCategory.entries()]
+  return [...byCategory]
     .filter(([, ids]) => ids.length >= threshold)
     .map(([category, ids]) => ({ category, count: ids.length, ids }))
     .sort((a, b) => b.count - a.count);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const cfg = loadConfig(process.argv[2] ?? process.cwd());
-  const cands = promotionCandidates(cfg);
-  if (cands.length === 0) {
+cli(import.meta.url, () => {
+  const found = promotionCandidates(loadConfig(process.argv[2] ?? process.cwd()));
+  if (found.length === 0) {
     console.log('승격 후보 없음');
-  } else {
-    console.log('승격 후보 — 같은 분류가 반복됐고 아직 막는 것이 없다:');
-    for (const c of cands) console.log(`  ${c.category} ×${c.count} (${c.ids.join(' ')})`);
-    console.log('\n⇒ 규약(AGENTS.md)에 절을 더하고, 각 행의 「무엇이 막는가」에 그 절 번호를 적는다.');
+    return;
   }
-}
+  console.log('승격 후보 — 같은 분류가 반복됐고 아직 막는 것이 없다:');
+  for (const c of found) console.log(`  ${c.category} ×${c.count} (${c.ids.join(' ')})`);
+  console.log('\n⇒ 규칙(.claude/rules/ 등)이나 테스트로 막고, 각 행의 「무엇이 막는가」에 그 위치를 적는다.');
+});
 ```
 
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
+- [x] **Step 4: 테스트가 통과하는지 확인한다**
 
-Run: `node --test test/`
-Expected: PASS — 전체 `# fail 0`
+Run: `node --test test/lesson-promote.test.mjs`
+Expected: PASS — `ℹ tests 7` · `ℹ pass 7` · `ℹ fail 0`
 
 - [ ] **Step 5: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
 git add tools/lesson-promote.mjs test/lesson-promote.test.mjs
 git commit -m "feat: LESSONS 승격 후보 검출
 
 같은 분류가 임계(기본 2회) 이상 반복되고 아직 막는 것이 없으면 후보로
-올린다. '무엇이 막는가'가 채워진 항목은 승격이 끝난 것이므로 세지 않는다
+올린다. 「무엇이 막는가」가 채워진 행은 승격이 끝난 것이므로 세지 않는다
 — 안 그러면 해결된 교훈이 영구히 후보에 남아 경고가 노이즈가 된다.
 
-⛔ 승격 자체는 자동화하지 않는다. 규약에 무엇을 어떻게 적을지는 사람의
-판단이고, 자동 승격은 검증 관문이 없다."
+칸은 lesson-append 가 쓰는 이스케이프(\\|)를 아는 공용 분리기로 나눈다.
+09-28 계획의 정규식은 증상에 | 가 들어가면 「무엇이 막는가」 칸을 잘못
+읽었다.
+
+⛔ 승격 자체는 자동화하지 않는다."
 ```
 
 ---
 
-# Phase 3 — ③ 게이트웨이
-
-### Task 9: 권한 정책 단일 원천
+### Task 8: 설정 병합 `policy-apply`
 
 **Files:**
-- Create: `policy/permissions.json`
-- Create: `tools/policy-apply.mjs`
-- Create: `tools/policy-diff.mjs`
+- Create: `policy/settings.json` · `tools/policy-apply.mjs`
 - Test: `test/policy.test.mjs`
 
 **Interfaces:**
-- Consumes: 없음 (`harness.json` 을 거치지 않는다 — 대상의 `.claude/settings.json` 을 직접 읽고 쓴다)
+- Consumes: `cli` (Task 1)
 - Produces:
-  - `mergePermissions(settings: object, policy: object) → object` — 순수 함수. `permissions.allow/deny/ask` 만 교체하고 **나머지 키는 그대로 보존**한다
-  - `diffPermissions(settings, policy) → { missing: string[], extra: string[] }`
-  - CLI `node tools/policy-apply.mjs <대상>` · `node tools/policy-diff.mjs <대상>`
+  - `mergeSettings(settings, policy) → object` — 순수 함수. 권한은 **합집합**, `env` · `enabledPlugins` · `extraKnownMarketplaces` 는 정책의 키만 정하고 나머지 보존, `_` 로 시작하는 정책 키는 옮기지 않는다. 다시 돌려도 같다(멱등)
+  - `POLICY` (`../policy/settings.json` 의 절대경로) · `settingsPath(root)` · `readJson(path)`
+  - CLI `node .harness/tools/policy-apply.mjs [대상]`
 
-⛔ **JSON 이다. YAML 이 아니다.** Node v26.5.0 에 YAML 파서가 없다 (실측). 「의존성 0」이 우선한다.
+⛔ **JSON 이다.** Node 는 YAML 파서를 내장하지 않는다. 주석은 `_note` · `_why` 키로 단다.
 
-- [ ] **Step 1: `policy/permissions.json` 을 작성한다**
+⛔ 이탈 보고기(`policy-diff`)는 두지 않는다 — final-gate 의 ponytail-review 가 걷어냈다(Task 11). 복구는 멱등인 `policy-apply` 재실행, 변경 확인은 `git diff .claude/settings.json`.
 
-ICFR 의 현재 정책을 원천으로 옮긴다.
+- [x] **Step 1: 정책을 작성한다**
+
+`policy/settings.json`:
 
 ```json
 {
-  "_note": "권한 정책 단일 원천. tools/policy-apply.mjs 가 대상의 .claude/settings.json 에 반영한다.",
+  "_note": "대상 .claude/settings.json 에 병합할 정책 단일 원천. tools/policy-apply.mjs 가 기존 키를 보존하며 반영한다.",
   "_why": {
-    "deny-push": "자율 루프는 레포 밖으로 나가지 않는다. push·배포·외부 호출은 사람이 한다",
-    "deny-rm": "되돌릴 수 없는 파괴적 작업. mv 는 허용하되 덮어쓰기 위험은 남는다",
-    "ask-force": "--force 는 되돌리기가 사라지는 지점이다"
+    "deny-push": "레포 밖으로 나가는 작업은 사람이 한다",
+    "deny-rm": "되돌릴 수 없는 삭제. mv 는 허용하되 덮어쓰기 위험은 남는다",
+    "ask-force": "--force 는 되돌리기가 사라지는 지점이다",
+    "ponytail-off": "흐름의 베이스는 superpowers 다. ponytail 은 final-gate 에서 /ponytail-review 로만 부른다",
+    "allow-narrow": "allow 는 사람의 확인을 건너뛴다. 인자로 쓰기·실행에 닿는 명령(find -exec, sort -o, git diff/log/show --output)과 와일드카드 경로(node .harness/tools/* 는 ../ 로 아무 스크립트나 연다)는 두지 않는다 — 10-02 보안 리뷰"
   },
-  "allow": [
-    "Read", "Write", "Edit", "Glob", "Grep",
-    "Bash(cd *)", "Bash(ls *)", "Bash(pwd)",
-    "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)",
-    "Bash(grep *)", "Bash(find *)", "Bash(sed *)", "Bash(awk *)",
-    "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(sort *)", "Bash(uniq *)", "Bash(diff *)",
-    "Bash(curl http://localhost:*)"
-  ],
-  "deny": [
-    "Bash(rm *)", "Bash(rmdir *)", "Bash(chmod *)", "Bash(chown *)",
-    "Bash(git push *)", "Bash(git reset --hard*)", "Bash(git clean *)",
-    "Bash(git checkout -- *)", "Bash(git rebase *)",
-    "Bash(kill *)", "Bash(pkill *)", "Bash(shutdown *)", "Bash(reboot *)",
-    "Bash(mkfs *)", "Bash(dd *)",
-    "Bash(curl * | bash*)", "Bash(wget * | bash*)",
-    "Bash(npm publish *)", "Bash(npx * deploy*)",
-    "Bash(find * -delete*)", "Bash(find * -exec rm*)", "Bash(find * -execdir rm*)"
-  ],
-  "ask": [
-    "Bash(*--force*)", "Bash(git restore *)",
-    "Bash(git stash drop*)", "Bash(git stash clear*)", "Bash(truncate *)"
-  ]
+  "permissions": {
+    "allow": [
+      "Read", "Glob", "Grep",
+      "Bash(node .harness/tools/verify.mjs)",
+      "Bash(node .harness/tools/decision-check.mjs)",
+      "Bash(node .harness/tools/lesson-promote.mjs)",
+      "Bash(node .harness/tools/state-check.mjs)",
+      "Bash(git status *)", "Bash(ls *)", "Bash(pwd)", "Bash(grep *)",
+      "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(diff *)"
+    ],
+    "deny": [
+      "Bash(rm *)", "Bash(rmdir *)",
+      "Bash(git push *)", "Bash(git reset --hard*)", "Bash(git clean *)",
+      "Bash(git checkout -- *)", "Bash(git rebase *)",
+      "Bash(curl * | bash*)", "Bash(wget * | bash*)",
+      "Bash(npm publish *)",
+      "Bash(find * -delete*)", "Bash(find * -exec rm*)"
+    ],
+    "ask": [
+      "Bash(*--force*)", "Bash(git restore *)", "Bash(git stash drop*)", "Bash(git stash clear*)"
+    ]
+  },
+  "env": { "PONYTAIL_DEFAULT_MODE": "off" },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "ponytail@ponytail": true
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": { "source": { "source": "github", "repo": "DietrichGebert/ponytail" } }
+  }
 }
 ```
 
-- [ ] **Step 2: 실패하는 테스트를 작성한다**
+- [x] **Step 2: 실패하는 테스트를 작성한다**
 
 `test/policy.test.mjs`:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergePermissions } from '../tools/policy-apply.mjs';
-import { diffPermissions } from '../tools/policy-diff.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { mergeSettings, POLICY, readJson } from '../tools/policy-apply.mjs';
+import { target } from './scene.mjs';
 
-const POLICY = { allow: ['Read', 'Write'], deny: ['Bash(rm *)'], ask: ['Bash(*--force*)'] };
+const APPLY = fileURLToPath(new URL('../tools/policy-apply.mjs', import.meta.url));
+const P = {
+  _note: '주석',
+  permissions: { allow: ['Read', 'Bash(node .harness/tools/verify.mjs)'], deny: ['Bash(git push *)'], ask: ['Bash(*--force*)'] },
+  env: { PONYTAIL_DEFAULT_MODE: 'off' },
+  enabledPlugins: { 'superpowers@claude-plugins-official': true, 'ponytail@ponytail': true },
+  extraKnownMarketplaces: { ponytail: { source: { source: 'github', repo: 'DietrichGebert/ponytail' } } },
+};
 
-test('allow·deny·ask 를 정책으로 교체한다', () => {
-  const out = mergePermissions({ permissions: { allow: ['옛것'], deny: [] } }, POLICY);
-  assert.deepEqual(out.permissions.allow, ['Read', 'Write']);
-  assert.deepEqual(out.permissions.deny, ['Bash(rm *)']);
-  assert.deepEqual(out.permissions.ask, ['Bash(*--force*)']);
+test('⭐ 권한은 합집합이다 — 대상의 기존 규칙을 지우지 않는다', () => {
+  const out = mergeSettings({ permissions: { allow: ['Bash(npm test)', 'Read'] } }, P);
+  assert.deepEqual(out.permissions.allow, ['Bash(npm test)', 'Read', 'Bash(node .harness/tools/verify.mjs)']);
+  assert.deepEqual(out.permissions.deny, ['Bash(git push *)']);
 });
 
-test('⭐ permissions 의 다른 키를 보존한다', () => {
-  const out = mergePermissions(
-    { permissions: { allow: [], defaultMode: 'auto', additionalDirectories: ['../docs'] } },
-    POLICY,
+test('⭐ 정책 밖의 키를 보존한다', () => {
+  const out = mergeSettings(
+    { permissions: { defaultMode: 'acceptEdits' }, hooks: { Stop: [{ x: 1 }] }, env: { FOO: '1' }, enabledPlugins: { 'other@m': true } },
+    P,
   );
-  assert.equal(out.permissions.defaultMode, 'auto');
-  assert.deepEqual(out.permissions.additionalDirectories, ['../docs']);
-});
-
-test('⭐ settings 의 다른 최상위 키를 보존한다', () => {
-  const out = mergePermissions({ hooks: { Stop: [{ x: 1 }] }, theme: 'dark' }, POLICY);
+  assert.equal(out.permissions.defaultMode, 'acceptEdits');
   assert.deepEqual(out.hooks, { Stop: [{ x: 1 }] });
-  assert.equal(out.theme, 'dark');
+  assert.deepEqual(out.env, { FOO: '1', PONYTAIL_DEFAULT_MODE: 'off' });
+  assert.equal(out.enabledPlugins['other@m'], true);
+  assert.equal(out.enabledPlugins['ponytail@ponytail'], true);
 });
 
-test('⛔ 원본을 변형하지 않는다', () => {
-  const src = { permissions: { allow: ['옛것'] } };
-  mergePermissions(src, POLICY);
-  assert.deepEqual(src.permissions.allow, ['옛것']);
+test('정책의 env 값이 대상의 같은 키를 이긴다', () => {
+  assert.equal(mergeSettings({ env: { PONYTAIL_DEFAULT_MODE: 'full' } }, P).env.PONYTAIL_DEFAULT_MODE, 'off');
 });
 
-test('정책에 있는데 설정에 없는 것을 missing 으로 낸다', () => {
-  const d = diffPermissions({ permissions: { allow: ['Read'], deny: [], ask: [] } }, POLICY);
-  assert.ok(d.missing.includes('allow: Write'));
-  assert.ok(d.missing.includes('deny: Bash(rm *)'));
+test('⛔ 원본을 변형하지 않고, _ 로 시작하는 주석 키를 옮기지 않는다', () => {
+  const src = { permissions: { allow: ['Read'] } };
+  const out = mergeSettings(src, P);
+  assert.deepEqual(src, { permissions: { allow: ['Read'] } });
+  assert.equal(out._note, undefined);
 });
 
-test('설정에만 있는 것을 extra 로 낸다', () => {
-  const d = diffPermissions({ permissions: { allow: ['Read', 'Write', '몰래추가'], deny: ['Bash(rm *)'], ask: ['Bash(*--force*)'] } }, POLICY);
-  assert.deepEqual(d.extra, ['allow: 몰래추가']);
-  assert.deepEqual(d.missing, []);
+test('⭐ 배포 정책이 superpowers·ponytail 을 켜고 ponytail 모드를 끈다', () => {
+  const p = readJson(POLICY);
+  assert.equal(p.env.PONYTAIL_DEFAULT_MODE, 'off');
+  assert.equal(p.enabledPlugins['superpowers@claude-plugins-official'], true);
+  assert.equal(p.enabledPlugins['ponytail@ponytail'], true);
+  assert.equal(p.extraKnownMarketplaces.ponytail.source.repo, 'DietrichGebert/ponytail');
+  assert.ok(p.permissions.allow.includes('Bash(node .harness/tools/verify.mjs)'));
+});
+
+test('⛔ 배포 정책의 allow 에는 인자로 쓰기·실행에 닿는 명령이 없다 — 자동 승인이 거부 목록을 우회한다', () => {
+  // find -exec · sort -o/--compress-program · git diff/log/show --output · node .harness/tools/* 의 ../ 경로
+  const escapes = readJson(POLICY).permissions.allow.filter(
+    (r) => /^Bash\((find|sort|git (diff|log|show))\b/.test(r) || /^Bash\(node [^)]*\*\)$/.test(r),
+  );
+  assert.deepEqual(escapes, []);
+});
+
+test('⭐ CLI: 기존 설정을 보존하며 반영하고, 다시 돌려도 같다 — 이탈은 재실행으로 복구한다', () => {
+  const dir = target(null, { '.claude/settings.json': JSON.stringify({ hooks: { Stop: [] }, permissions: { allow: ['Bash(npm test)'] } }) });
+  const path = join(dir, '.claude', 'settings.json');
+  assert.equal(spawnSync(process.execPath, [APPLY, dir]).status, 0);
+  const once = readFileSync(path, 'utf8');
+  const s = JSON.parse(once);
+  assert.deepEqual(s.hooks, { Stop: [] });
+  assert.ok(s.permissions.allow.includes('Bash(npm test)'));
+  assert.equal(s.env.PONYTAIL_DEFAULT_MODE, 'off');
+  assert.equal(spawnSync(process.execPath, [APPLY, dir]).status, 0);
+  assert.equal(readFileSync(path, 'utf8'), once);
+});
+
+test('⛔ CLI: 대상 설정이 깨진 JSON 이면 덮어쓰지 않고 실패한다', () => {
+  const dir = target(null, { '.claude/settings.json': '{ 깨짐' });
+  const r = spawnSync(process.execPath, [APPLY, dir], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /읽지 못했다/);
+  assert.equal(readFileSync(join(dir, '.claude', 'settings.json'), 'utf8'), '{ 깨짐');
 });
 ```
 
-- [ ] **Step 3: 테스트가 실패하는지 확인한다**
+- [x] **Step 3: 테스트가 실패하는지 확인한다**
 
 Run: `node --test test/policy.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/policy-apply.mjs'`
+Expected: FAIL — `Cannot find module '…/tools/policy-apply.mjs'`
 
-- [ ] **Step 4: `tools/policy-apply.mjs` 를 작성한다**
+- [x] **Step 4: `tools/policy-apply.mjs` 를 작성한다**
+
+`tools/policy-apply.mjs`:
 
 ```js
 #!/usr/bin/env node
-// ③ 게이트웨이 — 사람이 읽는 정책 한 곳에서 settings.json 을 만든다. 설계안(내용은 검증됨).
-//
-// ⛔ 덮어쓰지 않는다. permissions 의 allow·deny·ask 세 키만 교체하고 나머지는 보존한다.
-//    defaultMode · additionalDirectories · hooks · statusLine 은 정책의 소관이 아니다.
+// 설치 — 정책 한 곳(.harness/policy/settings.json)을 대상 .claude/settings.json 에 병합한다. 설계안.
+// ⛔ 덮어쓰지 않는다: 권한은 합집합, env·플러그인·마켓은 정책의 키만 정하고 나머지는 보존한다.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cli } from '../lib/config.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const POLICY_PATH = join(HERE, '..', 'policy', 'permissions.json');
+export const POLICY = fileURLToPath(new URL('../policy/settings.json', import.meta.url));
+const MAPS = ['env', 'enabledPlugins', 'extraKnownMarketplaces'];
+const PERMS = ['allow', 'deny', 'ask'];
 
-export function mergePermissions(settings, policy) {
-  return {
-    ...settings,
-    permissions: {
-      ...(settings.permissions ?? {}),
-      allow: [...policy.allow],
-      deny: [...policy.deny],
-      ask: [...policy.ask],
-    },
-  };
-}
-
-export function loadPolicy(path = POLICY_PATH) {
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-export function settingsPath(root) {
-  return join(root, '.claude', 'settings.json');
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const root = process.argv[2] ?? process.cwd();
-  const path = settingsPath(root);
-  const before = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  const after = mergePermissions(before, loadPolicy());
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(after, null, 2)}\n`);
-  console.log(`반영: ${path}`);
-  console.log('⛔ git diff 로 의도한 것만 바뀌었는지 직접 확인한다');
-}
-```
-
-- [ ] **Step 5: `tools/policy-diff.mjs` 를 작성한다**
-
-```js
-#!/usr/bin/env node
-// ③ 현재 설정과 정책의 괴리. 설계안.
-// ⛔ exit 1 하지 않는다 — 대상마다 정당한 추가가 있다. 보고만 한다.
-
-import { readFileSync, existsSync } from 'node:fs';
-import { loadPolicy, settingsPath } from './policy-apply.mjs';
-
-const KEYS = ['allow', 'deny', 'ask'];
-
-export function diffPermissions(settings, policy) {
-  const missing = [];
-  const extra = [];
-  for (const k of KEYS) {
-    const have = new Set(settings.permissions?.[k] ?? []);
-    const want = new Set(policy[k] ?? []);
-    for (const v of want) if (!have.has(v)) missing.push(`${k}: ${v}`);
-    for (const v of have) if (!want.has(v)) extra.push(`${k}: ${v}`);
+export function mergeSettings(settings, policy) {
+  const out = { ...settings };
+  if (policy.permissions) {
+    out.permissions = { ...settings.permissions };
+    for (const k of PERMS) {
+      if (policy.permissions[k]) out.permissions[k] = [...new Set([...(settings.permissions?.[k] ?? []), ...policy.permissions[k]])];
+    }
   }
-  return { missing, extra };
+  for (const k of MAPS) if (policy[k]) out[k] = { ...settings[k], ...policy[k] };
+  return out;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const path = settingsPath(process.argv[2] ?? process.cwd());
-  const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  const d = diffPermissions(settings, loadPolicy());
-  console.log(`정책에 있는데 없는 것 ${d.missing.length} · 설정에만 있는 것 ${d.extra.length}`);
-  for (const m of d.missing) console.log(`  + ${m}`);
-  for (const e of d.extra) console.log(`  ? ${e}`);
+export const settingsPath = (root) => join(root, '.claude', 'settings.json');
+
+export function readJson(path) {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    throw new Error(`JSON 을 읽지 못했다: ${path}\n  ${e.message}`);
+  }
 }
+
+cli(import.meta.url, () => {
+  const path = settingsPath(process.argv[2] ?? process.cwd());
+  const merged = mergeSettings(readJson(path), readJson(POLICY));
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`);
+  console.log(`반영: ${path}\n⛔ git diff 로 의도한 것만 바뀌었는지 직접 확인한다`);
+});
 ```
 
-- [ ] **Step 6: 테스트가 통과하는지 확인한다**
+- [x] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `node --test test/policy.test.mjs`
-Expected: PASS — `# pass 6` · `# fail 0`
-
-- [ ] **Step 7: 커밋한다**
-
-```bash
-cd ~/Projects/agent-harness
-git add policy/permissions.json tools/policy-apply.mjs tools/policy-diff.mjs test/policy.test.mjs
-git commit -m "feat: 권한 정책 단일 원천과 반영·괴리 도구
-
-ICFR 은 allow·deny·ask 가 user 스코프와 두 프로젝트 스코프에 흩어져 있고
-backend 와 web 이 제각각이다. 사람이 읽는 정책 한 곳에서 생성한다.
-
-⛔ YAML 이 아니라 JSON 이다. 아티클은 permissions.yaml 을 쓰지만 Node 는
-YAML 파서를 내장하지 않는다(실측: v26.5.0 에 node:yaml 없음). 의존성 0 이
-우선이라 JSON 으로 가고 주석은 _note·_why 키로 남긴다.
-
-⛔ 세 키만 교체하고 나머지는 보존한다. defaultMode·additionalDirectories·
-hooks 는 정책의 소관이 아닌데 덮어쓰면 프로젝트 설정이 조용히 날아간다.
-테스트가 보존을 직접 지킨다."
-```
-
----
-
-### Task 10: 노출 면적 보고 `surface-report.mjs`
-
-**Files:**
-- Create: `tools/surface-report.mjs`
-- Test: `test/surface-report.test.mjs`
-
-**Interfaces:**
-- Consumes: 없음
-- Produces: `surfaceReport({ settings, installed, repoExtensions }) → { plugins: string[], mcpServers: string[], hints: string[] }` — 순수 함수로 두어 테스트가 실제 `~/.claude` 에 묶이지 않게 한다
-
-아티클의 안티패턴 *"모든 도구를 에이전트에 노출"* 을 수치로 만든다.
-
-⚠️ **런타임 도구 개수는 세지 않는다.** 그러려면 MCP 서버를 띄워야 한다. 대신 **선언된 것**을 세고, 대상 저장소에 근거가 없는 플러그인을 힌트로 낸다.
-
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
-
-`test/surface-report.test.mjs`:
-
-```js
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { surfaceReport } from '../tools/surface-report.mjs';
-
-test('활성 플러그인과 MCP 서버를 센다', () => {
-  const r = surfaceReport({
-    settings: { enabledPlugins: { 'a@m': true, 'b@m': false }, mcpServers: { gitlab: {} } },
-    repoExtensions: new Set(['.java']),
-  });
-  assert.deepEqual(r.plugins, ['a@m']);
-  assert.deepEqual(r.mcpServers, ['gitlab']);
-});
-
-test('⭐ 확장자 근거가 없는 LSP 플러그인을 힌트로 낸다', () => {
-  const r = surfaceReport({
-    settings: { enabledPlugins: { 'typescript-lsp@m': true } },
-    repoExtensions: new Set(['.java']),
-  });
-  assert.equal(r.hints.length, 1);
-  assert.match(r.hints[0], /typescript-lsp/);
-  assert.match(r.hints[0], /\.ts/);
-});
-
-test('근거가 있으면 힌트를 내지 않는다', () => {
-  const r = surfaceReport({
-    settings: { enabledPlugins: { 'jdtls-lsp@m': true } },
-    repoExtensions: new Set(['.java']),
-  });
-  assert.deepEqual(r.hints, []);
-});
-
-test('규칙에 없는 플러그인은 판단하지 않는다', () => {
-  const r = surfaceReport({
-    settings: { enabledPlugins: { 'context7@m': true } },
-    repoExtensions: new Set(['.java']),
-  });
-  assert.deepEqual(r.hints, []);
-});
-```
-
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
-
-Run: `node --test test/surface-report.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/surface-report.mjs'`
-
-- [ ] **Step 3: `tools/surface-report.mjs` 를 작성한다**
-
-```js
-#!/usr/bin/env node
-// ③ 노출 면적. 설계안.
-//
-// 아티클의 안티패턴 「모든 도구를 에이전트에 노출」을 수치로 만든다.
-// ⚠️ 런타임 도구 개수는 안 센다 — MCP 서버를 띄워야 하고, 그 비용이 값보다 크다.
-//    선언된 것을 세고, 대상에 근거가 없는 것만 힌트로 낸다.
-
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, extname } from 'node:path';
-import { homedir } from 'node:os';
-
-// 플러그인 이름 조각 → 그것이 의미 있으려면 저장소에 있어야 할 확장자
-const NEEDS = {
-  'typescript-lsp': ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'],
-  'jdtls-lsp': ['.java'],
-  'pyright-lsp': ['.py'],
-};
-
-export function surfaceReport({ settings = {}, repoExtensions = new Set() }) {
-  const plugins = Object.entries(settings.enabledPlugins ?? {})
-    .filter(([, on]) => on)
-    .map(([name]) => name);
-  const mcpServers = Object.keys(settings.mcpServers ?? {});
-
-  const hints = [];
-  for (const p of plugins) {
-    const key = Object.keys(NEEDS).find((k) => p.startsWith(k));
-    if (!key) continue;
-    if (!NEEDS[key].some((e) => repoExtensions.has(e))) {
-      hints.push(`${p} — 저장소에 ${NEEDS[key].join('·')} 파일이 없다. 끄는 것을 검토한다`);
-    }
-  }
-  return { plugins, mcpServers, hints };
-}
-
-export function scanExtensions(root, skip = new Set(['node_modules', '.git', 'build', 'dist', 'target'])) {
-  const found = new Set();
-  const walk = (dir, depth) => {
-    if (depth > 6) return;
-    for (const name of readdirSync(dir)) {
-      if (skip.has(name)) continue;
-      const p = join(dir, name);
-      let st;
-      try { st = statSync(p); } catch { continue; }
-      if (st.isDirectory()) walk(p, depth + 1);
-      else found.add(extname(name));
-    }
-  };
-  walk(root, 0);
-  return found;
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const root = process.argv[2] ?? process.cwd();
-  const read = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {});
-  const user = read(join(homedir(), '.claude', 'settings.json'));
-  const proj = read(join(root, '.claude', 'settings.json'));
-  const settings = {
-    enabledPlugins: { ...user.enabledPlugins, ...proj.enabledPlugins },
-    mcpServers: { ...read(join(homedir(), '.claude.json')).mcpServers, ...read(join(root, '.mcp.json')).mcpServers },
-  };
-  const r = surfaceReport({ settings, repoExtensions: scanExtensions(root) });
-  console.log(`활성 플러그인 ${r.plugins.length} · MCP 서버 ${r.mcpServers.length}`);
-  for (const p of r.plugins) console.log(`  플러그인 ${p}`);
-  for (const m of r.mcpServers) console.log(`  MCP ${m}`);
-  for (const h of r.hints) console.log(`  ⚠️ ${h}`);
-  console.log('\n⚠️ claude.ai 계정 커넥터는 여기서 못 센다 — 웹 설정이다. 레포 밖 조치가 필요하다');
-}
-```
-
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
-
-Run: `node --test test/surface-report.test.mjs`
-Expected: PASS — `# pass 4` · `# fail 0`
-
-- [ ] **Step 5: 커밋한다**
-
-```bash
-cd ~/Projects/agent-harness
-git add tools/surface-report.mjs test/surface-report.test.mjs
-git commit -m "feat: 노출 면적 보고
-
-아티클의 안티패턴 '모든 도구를 에이전트에 노출'을 세는 도구. ICFR 실측
-(2026-09-28)에서 playwright 27개·Google Drive 11개를 비롯한 커넥터가
-상시 노출돼 있었고, icfr-web 은 커밋 0건이라 근거가 없었다.
-
-⚠️ 런타임 도구 개수는 세지 않는다. 그러려면 MCP 서버를 전부 띄워야 하고
-비용이 값보다 크다. 선언된 것을 세고 대상에 확장자 근거가 없는 LSP
-플러그인만 힌트로 낸다.
-
-⚠️ claude.ai 계정 커넥터는 이 도구가 못 본다. 웹 설정이라 레포 밖
-조치가 필요하다는 것을 출력에 명시한다."
-```
-
----
-
-# Phase 4 — ① 계약 · ② 지도 · ⑥ 트레이스
-
-### Task 11: 계약 추출 `task-extract.mjs`
-
-**Files:**
-- Create: `tools/task-extract.mjs`
-- Create: `templates/plan.skeleton.md`
-- Test: `test/task-extract.test.mjs`
-
-**Interfaces:**
-- Consumes: `loadConfig` (Task 1) — `cfg.plan`
-- Produces: `extractTasks(text) → Array<{ id, title, doneWhen: string[], escalateWhen: string[] }>`
-
-⛔ **계획서가 정본이고 이것은 추출본이다.** 사람은 계획서만 고친다.
-
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
-
-`test/task-extract.test.mjs`:
-
-```js
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { extractTasks } from '../tools/task-extract.mjs';
-
-const PLAN = [
-  '# 계획',
-  '',
-  '### Task 1: 골격',
-  '',
-  'done_when: ./gradlew test → failures=0',
-  'done_when: curl -s localhost:8080/api/health → 200',
-  'escalate_when: 마이그레이션 되돌리기가 필요해진다',
-  '',
-  '- [x] Step 1: 무언가',
-  '',
-  '### Task 2: 인증',
-  '',
-  'done_when: ./gradlew test --tests "*AuthControllerTest" → failures=0',
-].join('\n');
-
-test('태스크별로 done_when 을 모은다', () => {
-  const ts = extractTasks(PLAN);
-  assert.equal(ts.length, 2);
-  assert.equal(ts[0].id, '1');
-  assert.equal(ts[0].title, '골격');
-  assert.equal(ts[0].doneWhen.length, 2);
-});
-
-test('escalate_when 을 따로 모은다', () => {
-  const [t1] = extractTasks(PLAN);
-  assert.deepEqual(t1.escalateWhen, ['마이그레이션 되돌리기가 필요해진다']);
-});
-
-test('⛔ 다음 태스크의 done_when 이 앞 태스크로 새지 않는다', () => {
-  const ts = extractTasks(PLAN);
-  assert.equal(ts[1].doneWhen.length, 1);
-  assert.match(ts[1].doneWhen[0], /AuthControllerTest/);
-});
-
-test('⭐ done_when 이 없는 태스크를 빈 배열로 드러낸다 — 완료 기준 없는 태스크가 보여야 한다', () => {
-  const ts = extractTasks('### Task 9: 기준이 없다\n\n- [ ] Step 1: 무언가');
-  assert.deepEqual(ts[0].doneWhen, []);
-});
-```
-
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
-
-Run: `node --test test/task-extract.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/task-extract.mjs'`
-
-- [ ] **Step 3: `tools/task-extract.mjs` 를 작성한다**
-
-```js
-#!/usr/bin/env node
-// ① 요청 → 계약. 설계안(개념은 검증됨 — ICFR 계획서의 Task 표가 완료 기준을 이미 가진다).
-//
-// ⛔ 계획서가 정본이고 이것은 추출본이다. 여기서 나온 것을 파일로 저장하지 않는다.
-//    저장하면 계획서와 두 곳이 되고, 둘이면 반드시 어긋난다.
-
-import { readFileSync } from 'node:fs';
-import { loadConfig } from '../lib/config.mjs';
-
-const HEAD = /^###\s+Task\s+([\w.-]+)\s*:\s*(.+?)\s*$/;
-const DONE = /^\s*done_when:\s*(.+?)\s*$/;
-const ESCALATE = /^\s*escalate_when:\s*(.+?)\s*$/;
-
-export function extractTasks(text) {
-  const tasks = [];
-  let cur = null;
-  for (const line of text.split('\n')) {
-    const h = HEAD.exec(line);
-    if (h) {
-      cur = { id: h[1], title: h[2], doneWhen: [], escalateWhen: [] };
-      tasks.push(cur);
-      continue;
-    }
-    if (!cur) continue;
-    const d = DONE.exec(line);
-    if (d) { cur.doneWhen.push(d[1]); continue; }
-    const e = ESCALATE.exec(line);
-    if (e) cur.escalateWhen.push(e[1]);
-  }
-  return tasks;
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const cfg = loadConfig(process.argv[2] ?? process.cwd());
-  if (!cfg.plan) throw new Error('harness.json 에 plan 이 없다');
-  const tasks = extractTasks(readFileSync(cfg.plan, 'utf8'));
-  const bare = tasks.filter((t) => t.doneWhen.length === 0);
-  console.log(`태스크 ${tasks.length} · 완료 기준 없는 것 ${bare.length}`);
-  for (const t of tasks) {
-    console.log(`\nTask ${t.id}: ${t.title}`);
-    for (const d of t.doneWhen) console.log(`  ✅ ${d}`);
-    for (const e of t.escalateWhen) console.log(`  ⚠️ ${e}`);
-    if (t.doneWhen.length === 0) console.log('  ⛔ 완료 기준이 없다 — 무엇으로 끝났다고 말할 것인가');
-  }
-}
-```
-
-- [ ] **Step 4: `templates/plan.skeleton.md` 를 작성한다**
-
-```markdown
-# <기능> 구현 계획
-
-**Spec:** <설계서 경로>
-
-## Global Constraints
-
-<프로젝트 전역 요구 — 버전 하한, 명명 규약, 플랫폼. 각 한 줄>
-
----
-
-### Task 1: <이름>
-
-done_when: <명령> → <판정 기준>
-escalate_when: <여기서는 멈추고 사람을 부른다>
-
-**Files:** Create/Modify/Test 경로
-
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
-- [ ] **Step 2: 실패하는지 실행해 확인한다**
-- [ ] **Step 3: 최소 구현**
-- [ ] **Step 4: 통과하는지 실행해 확인한다**
-- [ ] **Step 5: 커밋**
-```
-
-⛔ **`done_when` 은 값이 아니라 명령이다.** 「테스트가 통과한다」가 아니라 실행 가능한 명령과 판정 기준을 적는다.
-
-- [ ] **Step 5: 테스트가 통과하는지 확인한다**
-
-Run: `node --test test/task-extract.test.mjs`
-Expected: PASS — `# pass 4` · `# fail 0`
+Expected: PASS — `ℹ tests 8` · `ℹ pass 8` · `ℹ fail 0`
 
 - [ ] **Step 6: 커밋한다**
 
 ```bash
-cd ~/Projects/agent-harness
-git add tools/task-extract.mjs templates/plan.skeleton.md test/task-extract.test.mjs
-git commit -m "feat: 계획서에서 완료 기준을 뽑는다
+git add policy/settings.json tools/policy-apply.mjs test/policy.test.mjs
+git commit -m "feat: 설정 병합 — 권한·env·플러그인 선언을 기존 설정 위에 얹는다
 
-아티클 ①(요청→계약)을 계획서 안에서 푼다. contracts/task.schema.json 을
-따로 두면 계획서와 두 곳이 되고, '저장소가 둘이면 반드시 어긋난다'.
-⇒ 계획서가 정본, 이것은 추출본. 결과를 파일로 저장하지 않는다.
+설치 대상은 이미 자기 settings.json 을 가진 프로젝트일 수 있다. 정책을
+교체하면 그 프로젝트의 허용 규칙과 훅이 조용히 날아간다. 권한은
+합집합으로, env·enabledPlugins·extraKnownMarketplaces 는 정책의 키만
+정하고 나머지는 보존한다. 깨진 JSON 은 덮어쓰지 않고 멈춘다.
 
-⭐ done_when 이 없는 태스크를 드러내는 것이 이 도구의 값이다. 완료 기준
-없는 태스크는 '끝났다'를 주장할 근거가 없다."
+정책이 PONYTAIL_DEFAULT_MODE=off 를 넣는다. 흐름의 베이스는
+superpowers 이고 ponytail 상시 모드의 「설명 금지」가 설계·질문 단계와
+충돌한다 — ponytail 은 final-gate 에서 리뷰로만 부른다.
+
+다시 돌려도 같다(멱등). 이탈 보고기를 따로 두지 않고 재실행으로
+복구한다 — 변경은 git diff 가 보여준다.
+
+⛔ allow 는 사람의 확인을 건너뛴다. 인자로 쓰기·실행에 닿는 명령
+(find -exec · sort -o · git diff/log/show --output)과 ../ 로 아무 스크립트나
+여는 와일드카드 경로는 두지 않는다 — 거부 목록을 우회한다(보안 리뷰).
+테스트가 배포 정책을 직접 읽어 지킨다."
 ```
 
 ---
 
-### Task 12: 지도 검사 `context-audit.mjs`
+### Task 9: 규칙 · 마지막 관문 · 설치 지시서
 
 **Files:**
-- Create: `tools/context-audit.mjs`
-- Test: `test/context-audit.test.mjs`
+- Create: `templates/rules/harness.md` · `templates/skills/final-gate/SKILL.md` · `templates/harness.json` · `SETUP.md` · `README.md`
+- Test: `test/templates.test.mjs`
 
 **Interfaces:**
-- Consumes: `loadConfig` (Task 1) — `cfg.map`
-- Produces: `auditMap(text, exists: (path) => boolean) → { sections, duplicates, gaps, brokenRefs, lines }` — `exists` 를 주입해 테스트가 파일시스템에 안 묶이게 한다
+- Consumes: Task 1~8 의 모든 도구 이름 · `loadConfig` · `repoFile` · `target`
+- Produces: 대상 프로젝트에서 `<이 레포>/SETUP.md 를 읽고 이 프로젝트에 적용해줘` 로 설치되는 상태. 규칙 파일의 `<decisions>` · `<lessons>` 는 SETUP 4단계가 채우는 자리다
 
-⭐ ICFR 의 「`## 5.` 가 두 번, `## 6.` 결번」이 여기서 잡힌다.
+- [x] **Step 1: 규칙 파일을 작성한다**
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+`templates/rules/harness.md`:
 
-`test/context-audit.test.mjs`:
+````markdown
+# 하네스 — 증거와 기록
 
-```js
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { auditMap } from '../tools/context-audit.mjs';
+> 상태: **설계안** · agent-harness 가 설치했다. 도구는 `.harness/tools/`, 경로 설정은 `.harness/harness.json`
 
-const ALWAYS = () => true;
+## 흐름 — superpowers 가 베이스다
 
-test('⭐ 절 번호 중복을 잡는다', () => {
-  const r = auditMap('## 1. 가\n## 2. 나\n## 2. 다\n', ALWAYS);
-  assert.deepEqual(r.duplicates, [2]);
-});
+brainstorming → writing-plans → 실행 → finishing-a-development-branch. 설계와 계획은 사람이 승인한다.
 
-test('⭐ 절 번호 결번을 잡는다', () => {
-  const r = auditMap('## 1. 가\n## 2. 나\n## 4. 라\n', ALWAYS);
-  assert.deepEqual(r.gaps, [3]);
-});
+- ⭐ **writing-plans 로 만든 계획의 마지막 태스크는 `final-gate` 스킬이다.** 그 태스크가 없는 계획은 끝난 계획이 아니다
+- 승인된 계획을 실행하는 동안에는 **묻지 않는다.** 확인이 필요한 것은 `<decisions>` 1절에 가정과 함께 적고 진행한다. 판단이 갈리면 되돌리기 쉬운 쪽을 고르고 그 이유를 적는다
+- 예외 — 여기서는 멈추고 묻는다: 되돌릴 수 없는 작업(데이터 삭제·이력 재작성) · 레포 밖으로 나가는 작업(push·배포·외부 서비스) · 비밀값
 
-test('ICFR 의 실제 증상 — 5가 둘, 6 결번', () => {
-  const r = auditMap('## 4. 가\n## 5. 나\n## 5. 다\n## 7. 라\n', ALWAYS);
-  assert.deepEqual(r.duplicates, [5]);
-  assert.deepEqual(r.gaps, [6]);
-});
+## 완료는 증거로 주장한다
 
-test('정상이면 둘 다 비어 있다', () => {
-  const r = auditMap('## 1. 가\n## 2. 나\n## 3. 다\n', ALWAYS);
-  assert.deepEqual(r.duplicates, []);
-  assert.deepEqual(r.gaps, []);
-});
-
-test('⭐ 백틱 경로가 실재하지 않으면 깨진 참조다', () => {
-  const r = auditMap('## 1. 가\n\n절차는 `docs/없는파일.md` 를 따른다\n', (p) => p !== 'docs/없는파일.md');
-  assert.deepEqual(r.brokenRefs, ['docs/없는파일.md']);
-});
-
-test('⛔ 경로처럼 안 생긴 백틱은 참조로 보지 않는다', () => {
-  const r = auditMap('## 1. 가\n\n`git status` 와 `snake_case` 를 쓴다\n', () => false);
-  assert.deepEqual(r.brokenRefs, []);
-});
-```
-
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
-
-Run: `node --test test/context-audit.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/context-audit.mjs'`
-
-- [ ] **Step 3: `tools/context-audit.mjs` 를 작성한다**
-
-```js
-#!/usr/bin/env node
-// ② 컨텍스트 컴파일 — 지도가 지도인지 백과사전인지 잰다. 설계안.
-// ⛔ exit 1 하지 않는다. 지도가 길다는 것은 결함이 아니라 신호다.
-
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { loadConfig } from '../lib/config.mjs';
-
-const SECTION = /^##\s+(\d+)\./;
-// 확장자가 있거나 슬래시를 포함하고, 공백이 없는 것만 경로로 본다
-const PATHISH = /^[\w./-]+(?:\.\w+|\/)[\w./-]*$/;
-
-export function auditMap(text, exists) {
-  const lines = text.split('\n');
-  const nums = [];
-  for (const line of lines) {
-    const m = SECTION.exec(line);
-    if (m) nums.push(Number(m[1]));
-  }
-
-  const seen = new Set();
-  const duplicates = [];
-  for (const n of nums) {
-    if (seen.has(n) && !duplicates.includes(n)) duplicates.push(n);
-    seen.add(n);
-  }
-
-  const gaps = [];
-  if (nums.length > 0) {
-    for (let n = Math.min(...nums); n <= Math.max(...nums); n += 1) {
-      if (!seen.has(n)) gaps.push(n);
-    }
-  }
-
-  const brokenRefs = [];
-  for (const m of text.matchAll(/`([^`\n]+)`/g)) {
-    const ref = m[1];
-    if (!PATHISH.test(ref)) continue;
-    if (!exists(ref) && !brokenRefs.includes(ref)) brokenRefs.push(ref);
-  }
-
-  return { sections: nums.length, duplicates, gaps, brokenRefs, lines: lines.length };
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const cfg = loadConfig(process.argv[2] ?? process.cwd());
-  const r = auditMap(readFileSync(cfg.map, 'utf8'), (p) => existsSync(join(cfg.root, p)));
-  console.log(`${cfg.map}\n절 ${r.sections} · ${r.lines}줄`);
-  if (r.duplicates.length) console.log(`  ⛔ 절 번호 중복: ${r.duplicates.join(', ')}`);
-  if (r.gaps.length) console.log(`  ⛔ 절 번호 결번: ${r.gaps.join(', ')}`);
-  for (const b of r.brokenRefs) console.log(`  ⚠️ 깨진 참조: ${b}`);
-  if (r.lines > 400) console.log('  ⚠️ 400줄을 넘었다 — 지도가 백과사전이 되고 있는지 본다');
-}
-```
-
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
-
-Run: `node --test test/context-audit.test.mjs`
-Expected: PASS — `# pass 6` · `# fail 0`
-
-- [ ] **Step 5: 커밋한다**
+⛔ 종료코드 0 · `BUILD SUCCESSFUL` · 러너의 `pass` 요약으로 통과를 주장하지 않는다. 테스트가 0개여도 그렇게 나온다.
 
 ```bash
-cd ~/Projects/agent-harness
-git add tools/context-audit.mjs test/context-audit.test.mjs
-git commit -m "feat: 지도 검사 — 절 번호와 깨진 참조
-
-ICFR 의 AGENTS.md 는 '## 5.' 가 두 번 나오고 '## 6.' 이 없다. 지도 역할을
-하는 문서라 '§6 을 보라'가 아무 데도 닿지 않는다. 사람 눈으로는 몇 주간
-안 잡혔다.
-
-깨진 참조는 경로처럼 생긴 백틱만 본다. git status 나 snake_case 같은
-것을 경로로 오인하면 경고가 노이즈가 되고, 노이즈가 되면 사람이 검사
-전체를 무시한다.
-
-⛔ exit 1 하지 않는다. 지도가 길다는 것은 결함이 아니라 신호다."
+node .harness/tools/verify.mjs      # verification-before-completion 에서 돌릴 명령 — 이번 실행이 쓴 결과 파일로 판정한다
 ```
 
----
-
-### Task 13: 트레이스 복원 `trace-read.mjs`
-
-**Files:**
-- Create: `tools/trace-read.mjs`
-- Test: `test/trace-read.test.mjs`
-
-**Interfaces:**
-- Consumes: 없음
-- Produces:
-  - `projectSlug(root: string) → string` — `/Users/x/Projects/y` → `-Users-x-Projects-y`
-  - `summarizeTranscript(lines: string[]) → { userTurns, toolCalls: Map<string, number>, files: number }`
-
-⛔ **새 로그를 쓰지 않는다.** 세션 트랜스크립트에 이미 전부 있다.
-
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
-
-`test/trace-read.test.mjs`:
-
-```js
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { projectSlug, summarizeTranscript } from '../tools/trace-read.mjs';
-
-test('경로를 트랜스크립트 슬러그로 바꾼다', () => {
-  assert.equal(projectSlug('/Users/x/Projects/ICFR/icfr-backend'), '-Users-x-Projects-ICFR-icfr-backend');
-});
-
-test('사람이 친 턴만 센다', () => {
-  const lines = [
-    JSON.stringify({ type: 'user', promptSource: 'typed', message: {} }),
-    JSON.stringify({ type: 'user', promptSource: 'sdk', message: {} }),
-    JSON.stringify({ type: 'assistant', message: {} }),
-  ];
-  const s = summarizeTranscript(lines);
-  assert.equal(s.userTurns, 1, 'sdk 턴은 벤치마크 세션이라 세지 않는다');
-});
-
-test('도구 호출을 이름별로 센다', () => {
-  const lines = [
-    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }, { type: 'tool_use', name: 'Read' }] } }),
-    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } }),
-  ];
-  const s = summarizeTranscript(lines);
-  assert.equal(s.toolCalls.get('Bash'), 2);
-  assert.equal(s.toolCalls.get('Read'), 1);
-});
-
-test('⛔ 깨진 줄을 만나도 멈추지 않는다', () => {
-  const lines = ['{깨짐', JSON.stringify({ type: 'user', promptSource: 'typed', message: {} })];
-  assert.equal(summarizeTranscript(lines).userTurns, 1);
-});
-
-test('빈 트랜스크립트는 0 이다', () => {
-  const s = summarizeTranscript([]);
-  assert.equal(s.userTurns, 0);
-  assert.equal(s.toolCalls.size, 0);
-});
-```
-
-- [ ] **Step 2: 테스트가 실패하는지 확인한다**
-
-Run: `node --test test/trace-read.test.mjs`
-Expected: FAIL — `Cannot find module '../tools/trace-read.mjs'`
-
-- [ ] **Step 3: `tools/trace-read.mjs` 를 작성한다**
-
-```js
-#!/usr/bin/env node
-// ⑥ 트레이스. 설계안.
-//
-// ⛔⛔ 아티클과 다르게 간다. runs/traces.jsonl 을 새로 쓰지 않는다.
-//
-// 세션 트랜스크립트(~/.claude/projects/<슬러그>/*.jsonl)에 프롬프트 원문이
-// 그대로 있어 어떤 채점 변형이든 사후 재측정이 된다. 새 로그는 그때의
-// 점수만 남아 A/B 를 못 돌린다 — context-graph 가 같은 자리에서 도달한 결론이다.
-
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
-
-export function projectSlug(root) {
-  return root.replace(/\//g, '-');
-}
-
-export function summarizeTranscript(lines) {
-  let userTurns = 0;
-  const toolCalls = new Map();
-  const files = new Set();
-
-  for (const line of lines) {
-    let ev;
-    try { ev = JSON.parse(line); } catch { continue; }
-    if (ev.type === 'user' && ev.promptSource === 'typed') userTurns += 1;
-    for (const c of ev.message?.content ?? []) {
-      if (c.type !== 'tool_use') continue;
-      toolCalls.set(c.name, (toolCalls.get(c.name) ?? 0) + 1);
-      if (c.input?.file_path) files.add(c.input.file_path);
-    }
-  }
-  return { userTurns, toolCalls, files: files.size };
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const root = process.argv[2] ?? process.cwd();
-  const dir = join(homedir(), '.claude', 'projects', projectSlug(root));
-  if (!existsSync(dir)) {
-    console.log(`트랜스크립트가 없다: ${dir}`);
-    process.exit(0);
-  }
-  const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
-  let turns = 0;
-  const tools = new Map();
-  for (const f of files) {
-    const s = summarizeTranscript(readFileSync(join(dir, f), 'utf8').split('\n'));
-    turns += s.userTurns;
-    for (const [k, v] of s.toolCalls) tools.set(k, (tools.get(k) ?? 0) + v);
-  }
-  console.log(`세션 ${files.length} · 사람이 친 턴 ${turns}`);
-  for (const [k, v] of [...tools].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
-    console.log(`  ${String(v).padStart(5)} ${k}`);
-  }
-  console.log('\n⇒ 실패 원인 분류는 사람이 state.lessons 에 적는다. 이 도구는 세기만 한다');
-}
-```
-
-- [ ] **Step 4: 테스트가 통과하는지 확인한다**
-
-Run: `node --test test/`
-Expected: PASS — 전체 `# fail 0`
-
-- [ ] **Step 5: 커밋한다**
+## 상태는 파일이 기억한다
 
 ```bash
-cd ~/Projects/agent-harness
-git add tools/trace-read.mjs test/trace-read.test.mjs
-git commit -m "feat: 트레이스를 새로 쓰지 않고 트랜스크립트에서 복원한다
-
-⛔ 아티클과 갈라지는 유일한 지점이다. 아티클은 runs/traces.jsonl 을
-쓰라고 하지만, ~/.claude/projects/<슬러그>/*.jsonl 에 프롬프트 원문이
-이미 있어 어떤 채점 변형이든 사후 재측정이 된다. 새 로그는 그때의 점수만
-남아 A/B 를 못 돌린다.
-
-promptSource=='sdk' 는 벤치마크 세션이라 사람이 친 턴에서 뺀다. 섞으면
-'일상 대화에서 얼마나 쓰였나'를 잴 때 판정이 뒤집힌다.
-
-깨진 JSON 줄을 만나도 멈추지 않는다 — 트랜스크립트는 세션이 비정상
-종료되면 마지막 줄이 잘려 있다."
+node .harness/tools/decision-check.mjs   # 답을 기다리는 가정 · 경과일
+node .harness/tools/lesson-promote.mjs   # 규약으로 올릴 반복 실패
+node .harness/tools/state-check.mjs      # 진행 상태 대장 (있을 때만)
 ```
 
----
+## 같은 실패가 두 번이면 규약으로 올린다
 
-# Phase 5 — 이식과 1호 적용
-
-### Task 14: `SETUP.md` 와 `README.md`
-
-**Files:**
-- Create: `SETUP.md`
-- Create: `README.md`
-- Create: `templates/harness.json`
-- Create: `templates/AGENTS.snippet.md`
-- Create: `templates/state/current.md`
-
-**Interfaces:**
-- Consumes: Task 1~13 의 모든 도구
-- Produces: 대상 프로젝트에서 `~/Projects/agent-harness/SETUP.md 를 읽고 이 프로젝트에 적용해줘` 로 설치 가능한 상태
-
-⚠️ 코드가 없어 자동 테스트가 없다. 검증은 Task 15 에서 ICFR 에 실제로 돌리는 것이다.
-
-- [ ] **Step 1: `templates/harness.json` 을 작성한다**
-
-```json
-{
-  "_note": "규격은 ../harness.schema.json. 경로는 이 파일이 있는 저장소 루트 기준.",
-  "map": "AGENTS.md",
-  "plan": "<계획서 경로 — 대상 밖이면 ../ 로>",
-  "state": {
-    "current": "<진행 상태 대장 — 없으면 이 키를 지운다>",
-    "currentRoot": "<대장의 경로가 가리키는 루트>",
-    "decisions": "<가정 적립 파일 — 없으면 templates/state/decisions.md 를 복사>",
-    "lessons": "<교훈 파일 — 없으면 templates/state/lessons.md 를 복사>"
-  },
-  "checks": [
-    { "id": "<이름>", "cmd": "<명령>", "kind": "junit-xml", "evidence": "<결과 파일 디렉터리>" }
-  ]
-}
-```
-
-- [ ] **Step 2: `templates/state/current.md` 를 작성한다**
-
-```markdown
-# 진행 상태 대장
-
-루프가 어디까지 갔는지가 **대화 컨텍스트가 아니라 이 파일에 있다.** 세션이 끊겨도
-`node tools/state-check.mjs` 한 번이면 이어받는다.
-
-| | |
-|---|---|
-| 대상 루트 | `<harness.json 의 state.currentRoot>` |
-| 갱신일 | YYYY-MM-DD |
-| 검사 | `node tools/state-check.mjs` |
-
-## 상태 값
-
-| 값 | 뜻 |
-|---|---|
-| `분석완료` | 끝까지 읽고 대조했다 |
-| `부분분석` | 일부만 봤다. **다시 봐야 한다** |
-| `미분석` | 아직 열어보지 않았다 |
-| `해당없음` | 대상 밖 |
-
-**해시가 바뀌면 상태가 무효가 된다.**
-
-⛔ **읽은 척하지 않는다.** grep 으로 일부만 본 것은 `부분분석` 이다.
-
-## 대장
-
-| 파일 | 상태 | 해시 | 회차 | 메모 |
-|---|---|---|---|---|
-```
-
-- [ ] **Step 3: `templates/AGENTS.snippet.md` 를 작성한다**
-
-```markdown
-<!--
-⛔ 그대로 붙이지 않는다. <…> 를 대상 프로젝트를 조사해서 채운다.
-   채울 것: 검사 명령 · 계획서 경로 · 상태 파일 경로. SETUP.md §4 참조.
--->
-
-## <N>. 멈추지 않는다
-
-**작업 중 사용자에게 묻지 않는다.** 확인이 필요한 것은 `<decisions 경로>` 에 모으고
-**가정을 명시한 채 구현을 계속한다.**
-
-판단이 갈리면 **되돌리기 쉬운 쪽**을 고르고, 그 선택과 이유를 적는다.
-
-### 예외 — 여기서는 멈춘다
-
-- 되돌릴 수 없는 파괴적 작업 (데이터 삭제, 이력 재작성)
-- 레포 밖으로 나가는 작업 (push, 배포, 외부 서비스 호출)
-- 비밀값을 다루는 작업
-
-## <N+1>. 완료는 증거로 주장한다
-
-⛔ **`BUILD SUCCESSFUL` · 종료코드 0 으로 통과를 주장하지 않는다.** 테스트가 0개여도 성공한다.
+실패를 고쳤으면 근본 원인과 함께 `<lessons>` 에 적는다:
 
 ```bash
-node tools/verify.mjs      # 선언된 검사 전량 — 결과 파일을 읽어 판정한다
-```
-
-태스크를 닫을 때는 `close-task` 스킬을 따른다.
-
-## <N+2>. 상태는 파일이 기억한다
-
-어디까지 갔는지를 **대화 컨텍스트에 두지 않는다** — 세션이 끊기면 사라진다.
-
-```bash
-node tools/state-check.mjs      # 재작업 대상 · 잔량
-node tools/decision-check.mjs   # 답을 기다리는 가정
-node tools/lesson-promote.mjs   # 규약으로 올릴 반복 실패
-```
-
-## <N+3>. 같은 실패가 두 번이면 규약으로 올린다
-
-```bash
-node tools/lesson-append.mjs <<'EOF'
+node .harness/tools/lesson-append.mjs <<'EOF'
 {"symptom":"<무엇이 보였나>","cause":"<근본 원인>","category":"검증 부족","guard":""}
 EOF
 ```
 
-분류: `누락된 컨텍스트` · `잘못된 도구` · `미흡한 권한` · `검증 부족`
+분류: `누락된 컨텍스트` · `잘못된 도구` · `미흡한 권한` · `검증 부족`. ⛔ 근본 원인이 없으면 도구가 거부한다.
 
-⛔ **증상만 적는 것은 일기다.** 근본 원인이 없으면 도구가 거부한다.
+## 플러그인
+
+superpowers 와 ponytail 을 쓴다. 이 PC 에 없으면 설치한다:
+
+```bash
+claude plugin install superpowers@claude-plugins-official --scope project
+claude plugin marketplace add DietrichGebert/ponytail --scope project
+claude plugin install ponytail@ponytail --scope project
 ```
 
-- [ ] **Step 4: `SETUP.md` 를 작성한다**
+다른 마켓의 같은 플러그인을 이미 쓰고 있으면 설치하지 말고 `.claude/settings.local.json` 의 `enabledPlugins` 에서 위 id 를 `false` 로 끈다.
+ponytail 모드는 꺼져 있다(`PONYTAIL_DEFAULT_MODE=off`) — `final-gate` 에서 `/ponytail-review` 로만 부른다.
+````
 
-`context-graph/SETUP.md` 와 같은 형식 — Claude 가 읽고 실행하는 지시서다.
+- [x] **Step 2: 마지막 관문 스킬을 작성한다**
+
+`templates/skills/final-gate/SKILL.md`:
 
 ````markdown
-# SETUP — 기존 프로젝트에 하네스를 얹는다
+---
+name: final-gate
+description: 승인된 계획의 구현 태스크를 모두 끝낸 뒤 finishing-a-development-branch 전에 한 번 쓴다 — 결과 파일로 검증하고, ponytail-review 로 과설계를 걷어내고, 다시 검증하고, security-review 를 한 번 돌리고, 가정·교훈을 기록한다
+---
 
-⛔ **이 문서는 사람이 아니라 Claude Code 에게 주는 지시서다.**
+# 마지막 관문
+
+> 상태: **설계안**
+
+계획 전체가 끝났을 때 **한 번만** 돈다. 태스크마다 돌지 않는다 — 태스크별 리뷰는 superpowers 실행 단계가 이미 한다.
+
+## 절차
+
+1. `node .harness/tools/verify.mjs` — ⛔ exit 0 이 아니면 여기서 멈추고 고친다
+2. `/ponytail-review` — 이 브랜치의 diff 전체가 대상이다. 지적마다 **걷어내거나**, 남기는 이유를 한 줄 적는다
+3. 걷어낸 것이 있으면 `node .harness/tools/verify.mjs` 를 **다시** 돌린다 — ⛔ exit 0
+4. `/security-review` **1회**
+5. 기록한다
+   - 실행 중 묻지 않고 넘어간 가정 → decisions 1절, 그리고 `node .harness/tools/decision-check.mjs`
+   - 반복된 실패 → `node .harness/tools/lesson-append.mjs`, 그리고 `node .harness/tools/lesson-promote.mjs`
+   - 계획서 체크박스
+6. 증거를 요약한다 — 검사 이름과 판정 근거를 verify 출력 그대로 옮긴다. 「통과했다」로 줄이지 않는다
+7. → `finishing-a-development-branch`
+
+## ⛔ 하지 않는 것
+
+| ⛔ | 왜 |
+|---|---|
+| verify 없이 finishing | 증거 없는 완료 주장이다 |
+| ponytail 모드를 켜고 작업 | superpowers 의 설계·질문 단계와 충돌한다. 리뷰만 부른다 |
+| `/security-review` 를 태스크마다 | 상시 훅으로 되돌아가는 것이다 |
+| 걷어낸 뒤 재검증 생략 | 걷어내기도 변경이다 |
+````
+
+- [x] **Step 3: 경로 설정 템플릿을 작성한다**
+
+`templates/harness.json`:
+
+```json
+{
+  "_note": "agent-harness 경로 설정. 모든 경로는 대상 저장소 루트 기준. 없는 상태 파일은 키를 지운다. 형식은 SETUP.md 3단계.",
+  "state": {
+    "decisions": "docs/harness/decisions.md",
+    "lessons": "docs/harness/lessons.md"
+  },
+  "checks": [
+    {
+      "id": "테스트",
+      "cmd": "<결과 XML 을 매번 새로 쓰는 테스트 명령>",
+      "kind": "junit-xml",
+      "evidence": "<결과 XML 파일 또는 디렉터리>"
+    }
+  ]
+}
+```
+
+- [x] **Step 4: 설치 지시서를 작성한다**
+
+`SETUP.md`:
+
+````markdown
+# SETUP — 프로젝트에 하네스를 얹는다
+
+> 상태: **설계안**
+
+⛔ **이 문서는 사람이 아니라 Claude Code 에게 주는 지시서다.** 대상 프로젝트에서
+`<이 레포 경로>/SETUP.md 를 읽고 이 프로젝트에 적용해줘` 로 시작한다.
+아래에서 `<하네스>` 는 이 문서가 있는 디렉터리, `<대상>` 은 적용할 프로젝트 루트다.
 
 ## ⛔ 절차 — 순서를 지킨다
 
@@ -2492,108 +2021,138 @@ EOF
 ```bash
 git -C <대상> rev-parse --is-inside-work-tree
 git -C <대상> status --porcelain
-ls <대상>/AGENTS.md
-node --version                       # 20+ 인가
+node --version        # v22 이상
+claude --version      # 2.1.277 이상
 ```
 
 | 걸리면 | 행동 |
 |---|---|
-| `AGENTS.md` 가 추적 중이다 | ⚠️ 팀에 나가는 파일이다. **절 추가를 확인받는다** |
-| `AGENTS.md` 가 없다 | 새로 만든다 |
-| 미커밋 변경이 있다 | ⛔ 멈추고 사용자에게 알린다 |
-| Node 20+ 가 없다 | ⛔ 중단 |
+| git 저장소가 아니다 | ⛔ 멈추고 알린다 — 설치 전후를 비교할 수 없다 |
+| 미커밋 변경이 있다 | ⛔ 멈추고 알린다 |
+| Node 22 미만 | ⛔ 중단 |
+| `.harness/` · `.claude/rules/harness.md` · `.claude/skills/final-gate/` 가 이미 있다 | ⛔ 덮어쓰지 않는다 — 재설치인지 사용자에게 묻는다 |
 
-⛔ **`AGENTS.md` 를 덮어쓰지 않는다. 절을 뒤에 추가한다.**
-
-⭐ **`CLAUDE.md` 다리를 놓지 않는다.** Claude Code 2.1.283 은 `AGENTS.md` 를 자동 로드한다
-(실측 2026-09-28, §6 의 방법으로 확인). 예전 안내와 다르다 — 복사본을 만들면 두 파일이 갈라진다.
-
-### 2. 도구 복사
+### 2. 도구와 템플릿을 복사한다
 
 ```bash
-mkdir -p <대상>/tools <대상>/lib
-cp ~/Projects/agent-harness/lib/*.mjs        <대상>/lib/
-cp ~/Projects/agent-harness/tools/*.mjs      <대상>/tools/
-cp ~/Projects/agent-harness/checks/verify.mjs <대상>/tools/
-cp -r ~/Projects/agent-harness/templates/skills/* <대상>/.claude/skills/
+mkdir -p <대상>/.harness <대상>/.claude/rules <대상>/.claude/skills <대상>/docs/harness
+cp -r <하네스>/lib <하네스>/tools <하네스>/policy <대상>/.harness/
+cp <하네스>/templates/rules/harness.md <대상>/.claude/rules/harness.md
+cp -r <하네스>/templates/skills/final-gate <대상>/.claude/skills/
+cp <하네스>/templates/harness.json <대상>/.harness/harness.json
 ```
 
-### 3. `harness.json` 을 채운다
+### 3. `.harness/harness.json` 을 채운다
 
 ⛔ **대상이 이미 쓰는 경로를 그대로 적는다. 파일을 옮기지 않는다.**
 
-조사할 것:
+**상태 파일** — 대상에 이미 가정 장부·교훈 파일이 있으면 그 경로를 적는다. 없으면 템플릿을 복사한다:
 
 ```bash
-ls <대상>/{AGENTS,Need-Check,CLAUDE}.md 2>/dev/null   # 이미 있는 상태 파일
-ls <대상>/docs/                                        # 대장이 있나
-grep -rn 'tasks.register\|"scripts"' <대상>            # 검사 명령이 뭔가
+cp <하네스>/templates/state/decisions.md <대상>/docs/harness/decisions.md
+cp <하네스>/templates/state/lessons.md <대상>/docs/harness/lessons.md
 ```
 
-`checks` 는 **실제로 도는 명령**만 적는다. 결과 파일 경로를 확인한다:
+파일 단위 분석 진행을 추적해야 하는 일(레거시 이해, 레퍼런스 대조)이면 `<하네스>/templates/state/current.md` 를
+복사하고 `state.current` 에 적는다. 대장의 경로가 다른 저장소를 가리키면 `state.currentRoot` 도 적는다.
+
+**검사** — `checks` 에는 **실제로 도는 명령**만, 그리고 **결과 XML 을 매번 새로 쓰는** 명령만 적는다.
+`verify` 는 이번 실행이 쓰지 않은 XML 을 증거로 쓰지 않는다.
+
+| 스택 | `cmd` | `evidence` |
+|---|---|---|
+| Node (`node:test`) | `node -e "require('fs').mkdirSync('test-results',{recursive:true})" && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results/junit.xml` | `test-results` |
+| Gradle | `./gradlew cleanTest test` (Windows `cmd`: `gradlew cleanTest test`) | `build/test-results/test` |
+| Maven | `mvn test` | `target/surefire-reports` |
+| pytest | `pytest --junitxml=test-results/junit.xml` | `test-results` |
+
+- Node 는 junit 결과 디렉터리를 만들지 않는다 — 없으면 ENOENT 로 죽는다(실측). 위처럼 먼저 만든다
+- Gradle 의 `test` 는 UP-TO-DATE 면 결과를 다시 쓰지 않는다 — `cleanTest` 를 붙인다
+- 명령은 플랫폼 기본 셸(`sh` / Windows `cmd`)로 돈다. 팀이 OS 를 섞어 쓰면 `npm test` 처럼 양쪽에서 같은 명령을 고른다
+- 결과 XML 을 낼 수 없는 스택은 `kind: "exit-code"` 로 두고, **테스트 0개를 못 잡는다**고 사용자에게 알린다
+- 생성물이 계약인 경우(OpenAPI 스냅샷 등)는 `kind: "file-unchanged"` — 다시 만들었을 때 git 이 깨끗해야 통과다
+
+### 4. 규칙 파일의 자리를 채운다
+
+`<대상>/.claude/rules/harness.md` 의 `<decisions>` · `<lessons>` 를 harness.json 의 실제 경로로 바꾼다. 바꾼 뒤 확인한다:
 
 ```bash
-ls <대상>/build/test-results/test/*.xml    # gradle
-ls <대상>/coverage/ <대상>/junit.xml       # node
+grep -n '<decisions>\|<lessons>' <대상>/.claude/rules/harness.md   # ⛔ 아무것도 나오지 않아야 한다
 ```
 
-### 4. `AGENTS.md` 에 절 추가
+⛔ **대상의 `CLAUDE.md` · `AGENTS.md` 를 건드리지 않는다.** `.claude/rules/` 는 둘 중 무엇이 있든 로드된다.
+`AGENTS.md` 에 절을 더하면 `CLAUDE.md` 가 있는 대상에서는 조용히 빠진다.
 
-`templates/AGENTS.snippet.md` 의 `<…>` 를 채워 **끝에 추가한다.** 절 번호는 기존 마지막 +1 부터.
-
-```bash
-node tools/context-audit.mjs <대상>      # ⛔ 절 번호 중복·결번이 0 이어야 한다
-```
-
-### 5. ⭐ 소급 입력 — 가장 중요하다
-
-⛔ **빈 상태 파일은 값이 0이다.** 설치만 하면 사용자는 「효과가 없다」고 판단한다.
-
-최근 이력에서 **교훈 2~3건**을 소급 입력한다. 근거는 git 이다:
-
-```bash
-git -C <대상> log --oneline -30 | grep -iE 'fix|버그|수정|잘못|누락'
-```
-
-커밋 본문에서 **근본 원인**을 찾아 넣는다. 증상만 있으면 넣지 않는다.
-
-### 6. 검증 — ⛔ 자기 보고도 도구 출력도 믿지 않는다
-
-**6-a. 도구가 도는가**
-
-```bash
-cd <대상>
-node tools/verify.mjs          # ⛔ exit 0
-node tools/state-check.mjs     # 대장이 있으면
-node tools/decision-check.mjs
-node tools/context-audit.mjs
-node tools/lesson-promote.mjs
-git status --porcelain         # ⛔ 의도한 것만 바뀌었는가
-```
-
-**6-b. ⭐ 새 세션이 실제로 읽는가**
+### 5. 설정과 플러그인
 
 ```bash
 cd <대상>
-claude -p --model haiku "도구를 절대 쓰지 마라. 파일을 읽지도 검색하지도 마라.
-질문: <방금 추가한 절에만 있는 사실>. 모르면 정확히 '모름'."
+node .harness/tools/policy-apply.mjs      # 권한 · env · 플러그인 선언을 .claude/settings.json 에 병합
+claude plugin list --json                 # 이 PC 에 설치된 플러그인 — {id, scope, enabled} 배열
 ```
 
-| 판정 | 의미 |
+superpowers 와 ponytail 각각에 대해:
+
+| `list` 결과 | 행동 |
 |---|---|
-| 정확히 답한다 | ✅ 자동 로드가 된다 |
-| 「모름」 | ⛔ 절이 안 들어갔다 — `AGENTS.md` 위치와 내용을 다시 본다 |
-| 도구를 쓰려 한다 | ⚠️ 금지를 더 강하게 쓴다 |
+| 정책의 id (`superpowers@claude-plugins-official` · `ponytail@ponytail`) 가 `enabled` | 아무것도 하지 않는다 |
+| 같은 이름이 **다른 마켓 id** 로 `enabled` (예: `superpowers@superpowers-marketplace`) | 설치하지 않는다. `.claude/settings.local.json` 의 `enabledPlugins` 에 정책 id 를 `false` 로 넣는다 — local 이 project 보다 우선한다 |
+| 없다 | `claude plugin install <정책 id> --scope project` — ponytail 은 먼저 `claude plugin marketplace add DietrichGebert/ponytail --scope project` |
 
-⭐ **반드시 음성 대조도 한다.** `AGENTS.md` 에 **없는** 것을 물어 「모름」이 나오는지 본다.
+프로젝트가 선언한 플러그인이 그 PC 에 이미 사용자 범위로 설치돼 있으면, 그 프로젝트에서 세션을 열 때 프로젝트 범위 설치 기록이
+자동으로 생긴다(실측) — 팀원은 따로 할 일이 없다. 설치되지 않은 PC 는 `/plugin` 오류 탭에
+`enabled in project settings but isn't installed here` 가 뜬다 — 그때 위 표대로 설치한다.
 
-**6-c. ⚠️ `/clear` 직후도 본다**
+`.claude/settings.local.json` 을 만들었으면 git 이 무시하는지 확인한다:
 
-미해결 관측이 있다 — `/clear` 후 세션에 `AGENTS.md` 가 안 들어온 사례 1회. 재현되면 기록한다.
+```bash
+git check-ignore -q .claude/settings.local.json || echo '.claude/settings.local.json' >> .gitignore
+```
 
-**6-d. `AGENTS.md` diff 를 사용자에게 보여준다.** 기존 내용 보존은 사용자만 판정한다.
+### 6. ⭐ 소급 입력 — git 이력이 있는 프로젝트만
 
-### 7. 보고 — 3단
+⛔ **빈 교훈 파일은 값이 0이다.** 이력이 있으면 최근 이력에서 교훈을 2~3건 넣는다:
+
+```bash
+git log --oneline -50 | grep -iE 'fix|bug|revert|버그|수정|잘못|누락'
+```
+
+커밋 본문에서 **근본 원인**이 드러난 것만 `node .harness/tools/lesson-append.mjs` 로 넣는다. 이미 규칙·테스트로
+막혀 있으면 `guard` 에 그 위치를 적는다 — 승격 후보로 다시 뜨지 않는다. 이력이 없는 신규 프로젝트는 건너뛴다.
+
+### 7. 검증 — ⛔ 자기 보고도 도구 출력도 믿지 않는다
+
+**7-a. 도구가 도는가**
+
+```bash
+node .harness/tools/verify.mjs; echo "exit=$?"    # ⛔ exit 0 — 아니면 checks 를 고친다. 테스트가 실제로 실패 중이면 사용자에게 알린다
+node .harness/tools/decision-check.mjs
+node .harness/tools/lesson-promote.mjs
+node .harness/tools/state-check.mjs
+git status --porcelain                             # 의도한 파일만 바뀌었는가
+```
+
+**7-b. 규칙이 새 세션에 로드되는가** — 도구를 끈 새 세션으로 양성·음성을 대조한다
+
+```bash
+claude -p --model haiku --tools "" --no-session-persistence "도구를 쓰지 마라. 이 저장소에서 작업 완료를 주장하기 전에 반드시 돌려야 하는 명령은 정확히 무엇인가? 주어진 지시에 없으면 정확히 '모름'이라고만 답하라." < /dev/null
+claude -p --model haiku --tools "" --no-session-persistence "도구를 쓰지 마라. 이 저장소의 배포 승인권자는 누구인가? 주어진 지시에 없으면 정확히 '모름'이라고만 답하라." < /dev/null
+```
+
+양성은 `node .harness/tools/verify.mjs` 를, 음성은 「모름」을 답해야 한다. 양성이 「모름」이면 규칙 파일 위치와 `/config` 의 Project instructions 를 본다.
+
+**7-c. ponytail 이 꺼졌는가** — 훅 출력은 stream-json 에 그대로 나온다
+
+```bash
+claude -p --model haiku --tools "" --no-session-persistence --output-format stream-json --verbose "ok" < /dev/null | grep -c "PONYTAIL MODE ACTIVE"    # ⛔ 0
+```
+
+**7-d. 플러그인이 하나씩인가** — `claude plugin list --json` 에서 이름이 superpowers · ponytail 인 `enabled` 항목의 **id** 가 각각 하나다.
+같은 id 가 여러 줄인 것은 정상이다 — 목록은 이 PC 의 모든 프로젝트 설치 기록을 보여준다.
+
+**7-e.** `git diff` 를 사용자에게 보여준다. 기존 설정 보존은 사용자만 판정한다.
+
+### 8. 보고 — 3단
 
 ```markdown
 ## ✅ 얹은 것
@@ -2603,261 +2162,580 @@ claude -p --model haiku "도구를 절대 쓰지 마라. 파일을 읽지도 검
 1. <무엇> — <왜 내가 못 정하는가>
 
 ## ⚠️ 이 프로젝트에 새로 생기는 제약
-- 태스크를 닫을 때 close-task 를 따라야 한다
-- <그 외>
+- 계획의 마지막 태스크가 final-gate 다
+- 완료를 주장하기 전에 node .harness/tools/verify.mjs
 ```
 
 ## ⛔ 하지 않는 것
 
 | ⛔ | 왜 |
 |---|---|
-| 대상의 기존 상태 파일을 옮기기 | `AGENTS.md` 의 기존 참조가 깨진다 |
-| `CLAUDE.md` 복사본 만들기 | 두 파일이 갈라진다. 자동 로드되므로 불필요하다 |
+| 대상의 기존 상태 파일을 옮기기 | 기존 참조가 깨진다 |
+| `CLAUDE.md` · `AGENTS.md` 에 절 추가 | `CLAUDE.md` 가 있으면 `AGENTS.md` 는 로드되지 않는다. 규칙은 `.claude/rules/` 에 |
 | 훅으로 상태를 자동 기록 | 검증 관문이 없다 |
 | 검사를 pre-push 에 전부 걸기 | 진행도 게이트를 correctness 게이트로 쓰면 급한 수정이 막힌다 |
+| ponytail 모드를 켜 두기 | superpowers 의 설계·질문 단계와 충돌한다. final-gate 에서 `/ponytail-review` 로만 |
 ````
 
-- [ ] **Step 5: `README.md` 를 작성한다**
+- [x] **Step 5: README 를 작성한다**
 
-설계서 §1·§3·§8 을 옮긴다. 반드시 포함할 것:
+`README.md`:
 
-- 세 레포 분담표 (`context-graph` · `agent-init-template` · `agent-harness`)
-- **정직한 값** 표 (설계서 §3 그대로) — 「이미 되나」가 ✅ 인 줄은 고유값이 아니라고 명시
-- ⛔ **도입하지 말아야 할 때** (설계서 §8 그대로)
-- ⭐ **`AGENTS.md` 는 자동 로드된다** (설계서 §2) — `context-graph` 의 낡은 전제를 바로잡는 문단
-- 각 도구 한 줄 설명 + `검증됨`/`설계안` 딱지
-- **실측 근거는 Task 15 이후에 채운다** — 지금은 「1호 적용 전, 실측 없음」이라고 적는다
+````markdown
+# agent-harness
 
-⛔ **없는 실측을 적지 않는다.** `context-graph` 의 README 가 강한 것은 숫자가 진짜이기 때문이다.
+> 상태: ⛔ **설계안** — 실제 프로젝트에 적용해 값을 낸 것은 아직 없다. 합성 대상 실측은 [§실측](#실측)
 
-- [ ] **Step 6: 커밋한다**
+어느 프로젝트에나 얹는 Claude Code 하네스. **흐름은 superpowers, 마지막 과설계 점검은 ponytail** 이 맡고,
+둘이 못 하는 두 가지를 이 레포가 맡는다:
+
+1. **완료의 결정론적 증거** — 종료코드도 러너 요약도 테스트 0개를 통과시킨다. `verify` 는 이번 실행이 쓴 결과 XML 의 `<testcase>` 를 센다
+2. **묻지 않고 넘어간 가정 · 반복 실패의 적립** — 실행 중 남긴 가정이 답 없이 묵지 않게, 같은 실패가 규약이 되게
+
+## 설치
+
+대상 프로젝트에서 Claude Code 에게:
+
+```
+<이 레포 경로>/SETUP.md 를 읽고 이 프로젝트에 적용해줘
+```
+
+Node 22+ · Claude Code 2.1.277+ · git 저장소. 대상에는 `.harness/` · `.claude/rules/harness.md` ·
+`.claude/skills/final-gate/` · `docs/harness/` 가 생기고 `.claude/settings.json` 이 병합된다.
+대상의 `CLAUDE.md` · `AGENTS.md` 는 건드리지 않는다 — `.claude/rules/` 는 둘 중 무엇이 있든 로드된다.
+
+## 흐름
+
+```
+brainstorming ─(사람 승인)→ writing-plans ─(사람 승인)→ 실행 (TDD)
+   ├ 실행 중 — 묻지 않는다: 가정은 decisions 에, 반복 실패는 lessons 에
+   └ 완료를 주장하기 전 — node .harness/tools/verify.mjs
+→ 계획의 마지막 태스크 = final-gate → finishing-a-development-branch
+
+final-gate: verify → /ponytail-review → 걷어낸 뒤 verify 재실행 → /security-review 1회 → 기록
+```
+
+## 정직한 값 — 이미 되는 것은 넣지 않는다
+
+| 차원 | 이미 되나 | 여기서 |
+|---|---|---|
+| 계획 · TDD · 검증 규율 | ✅ superpowers | 안 만든다 |
+| 과설계 리뷰 | ✅ ponytail | final-gate 에서 부른다 |
+| 지시 파일 검사 · 노출 도구 | ✅ `/doctor prompt-audit` · `claude plugin details` | 안 만든다 |
+| **완료의 결정론적 증거** | ❌ 종료코드·러너 요약은 테스트 0개를 통과시킨다 | ⭐ `verify` |
+| **묻지 않은 가정의 적립** | ❌ | ⭐ `decision-check` |
+| **반복 실패 → 규약 승격** | ❌ | ⭐ `lesson-append` · `lesson-promote` |
+| **상태 대장이 거짓말하는지** | ❌ | ⭐ `state-check` (대장이 있을 때) |
+
+## 구성 요소
+
+| 도구 | 하는 일 | 종료 | 딱지 |
+|---|---|---|---|
+| `verify` | 선언된 검사를 돌리고 이번 실행이 쓴 결과 파일로 판정 | 실패·검사 0개면 1 | 설계안 |
+| `state-check` | 대장의 해시가 원본과 맞는지 | 파일 소멸만 1 | 설계안 |
+| `decision-check` | 답 없이 묵는 가정 · 경과일 | 0 고정, 14일 넘으면 경고 | 설계안 |
+| `lesson-append` | 실패 1건 기록 — 근본 원인 없으면 거부 | 거부 시 1 | 설계안 |
+| `lesson-promote` | 같은 분류 2회 + 막는 것 없음 → 후보 | 0 고정 | 설계안 |
+| `policy-apply` | 권한 · env · 플러그인 선언을 기존 설정 위에 병합 — 다시 돌려도 같다 | 깨진 JSON 이면 1 | 설계안 |
+| `final-gate` 스킬 | 마지막 관문 | — | 설계안 |
+
+## ⛔ 도입하지 말아야 할 때
+
+| 이럴 땐 하지 않는다 | 왜 |
+|---|---|
+| 결정론적 검사를 만들 수 없는 스택이다 | verify 가 비면 나머지가 장부질에 그친다 |
+| 계획 없이 한두 번 묻고 끝나는 작업뿐이다 | 가정·교훈이 쌓일 반복이 없다 |
+| 프로젝트 수명이 몇 주다 | LESSONS 는 반복이 있어야 승격된다 |
+| superpowers 를 쓰지 않기로 한 팀이다 | 흐름의 베이스가 superpowers 다 |
+
+## 실측
+
+_적용 전 — 실측 없음._ `node proof/run.mjs --claude` 가 이 절을 채운다 (Task 10).
+
+## 개발
 
 ```bash
-cd ~/Projects/agent-harness
-git add SETUP.md README.md templates/
-git commit -m "docs: 설치 지시서와 README
+npm test      # 결과 XML 은 test-results/
+```
 
-context-graph 의 SETUP 형식을 따른다 — 사람이 손으로 따라 하지 않고
-Claude 가 읽고 실행하는 지시서다.
+설계: `docs/2026-09-28-design.md` · 계획: `docs/plans/2026-09-28-agent-harness.md`
+````
 
-⭐ CLAUDE.md 다리를 놓지 않는다. context-graph 가 '이걸 빠뜨리면 전부
-무용지물'이라 한 그 단계인데, 2.1.283 에서 AGENTS.md 가 자동 로드되는
-것을 확인했다(양성·음성 대조). 복사본을 만들면 두 파일이 갈라질 뿐이다.
+- [x] **Step 6: 실패하는 템플릿 테스트를 작성한다**
 
-⭐ 소급 입력을 절차에 넣는다. 빈 상태 파일의 값은 0이고, 설치만 하면
-사용자는 효과가 없다고 판단한다.
+`test/templates.test.mjs`:
 
-README 의 실측 절은 비워 둔다. 1호 적용 전에 숫자를 적으면 그 순간
-이 레포가 스스로의 원칙을 어긴다."
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { loadConfig } from '../lib/config.mjs';
+import { target, repoFile } from './scene.mjs';
+
+const at = (rel) => new URL(`../${rel}`, import.meta.url);
+const SHIPPED = [
+  'SETUP.md',
+  'README.md',
+  'templates/rules/harness.md',
+  'templates/skills/final-gate/SKILL.md',
+  'templates/state/decisions.md',
+  'templates/state/lessons.md',
+  'templates/state/current.md',
+];
+
+test('⛔ 배포 문서가 가리키는 도구가 실재한다 — 깨진 참조는 설치된 규칙을 거짓말로 만든다', () => {
+  for (const rel of SHIPPED) {
+    for (const [, name] of repoFile(rel).matchAll(/\.harness\/tools\/([\w-]+\.mjs)/g)) {
+      assert.ok(existsSync(at(`tools/${name}`)), `${rel} → tools/${name}`);
+    }
+  }
+});
+
+test('⛔ SETUP 이 복사하라는 것이 실재한다', () => {
+  for (const [, rel] of repoFile('SETUP.md').matchAll(/<하네스>\/((?:templates|lib|tools|policy)[\w./-]*)/g)) {
+    assert.ok(existsSync(at(rel)), `SETUP.md → ${rel}`);
+  }
+});
+
+test('규칙 파일이 완료 명령과 마지막 관문을 지시하고, SETUP 이 채울 자리를 둔다', () => {
+  const rules = repoFile('templates/rules/harness.md');
+  assert.match(rules, /node \.harness\/tools\/verify\.mjs/);
+  assert.match(rules, /마지막 태스크는 `final-gate`/);
+  assert.match(rules, /<decisions>/);
+  assert.match(rules, /<lessons>/);
+});
+
+test('final-gate 스킬의 이름이 디렉터리 이름과 같다 — 다르면 스킬이 안 잡힌다', () => {
+  assert.match(repoFile('templates/skills/final-gate/SKILL.md'), /^---\r?\nname: final-gate\r?\n/);
+});
+
+test('설치 템플릿 harness.json 이 로더를 통과한다', () => {
+  const cfg = loadConfig(target(null, { '.harness/harness.json': repoFile('templates/harness.json') }));
+  assert.equal(cfg.checks.length, 1);
+  assert.ok(cfg.state.decisions && cfg.state.lessons);
+});
+```
+
+- [x] **Step 7: 템플릿 테스트가 통과하는지 확인한다**
+
+템플릿과 문서를 먼저 썼으므로 이 테스트는 바로 통과해야 한다. ⛔ 대신 **음성 대조**를 한 번 한다 — 규칙 파일의 `verify.mjs` 를 `verifyy.mjs` 로 잠깐 바꿔 첫 테스트가 실패하는지 본 뒤 되돌린다.
+
+Run: `node --test test/templates.test.mjs`
+Expected: PASS — `ℹ tests 5` · `ℹ pass 5` · `ℹ fail 0` (음성 대조 중에는 `ℹ fail 2` — 참조 테스트와 규칙 내용 테스트가 함께 잡는다)
+
+- [x] **Step 8: 전체 테스트를 돌린다**
+
+Run: `npm test`
+Expected: PASS — `ℹ tests 79` · `ℹ pass 79` · `ℹ fail 0`, `test-results/junit.xml` 생성
+
+- [ ] **Step 9: 커밋한다**
+
+```bash
+git add templates/rules/harness.md templates/skills/final-gate/SKILL.md templates/harness.json SETUP.md README.md test/templates.test.mjs
+git commit -m "feat: 규칙·마지막 관문·설치 지시서
+
+규칙은 .claude/rules/harness.md 한 파일로 심는다. AGENTS.md 는 CLAUDE.md
+가 있는 대상에서 로드되지 않는다(공식 문서·실측). 범용 템플릿에서
+CLAUDE.md 가 있는 대상은 흔하다.
+
+규칙이 「writing-plans 계획의 마지막 태스크는 final-gate」를 강제한다.
+관문이 계획서의 체크박스가 돼야 잊히지 않는다. final-gate 는 verify →
+ponytail-review → 재검증 → security-review 1회 → 기록 순이고, 계획 끝에
+한 번만 돈다.
+
+SETUP 은 플러그인 중복을 다룬다. 같은 이름의 플러그인을 두 마켓에서
+켰을 때 무엇이 로드되는지는 문서에 없어서, 이미 다른 마켓으로 켜져
+있으면 설치하지 않고 로컬 설정에서 정책 id 를 끈다.
+
+배포 문서가 가리키는 도구·템플릿이 실재하는지 테스트가 지킨다."
 ```
 
 ---
 
-### Task 15: ICFR 1호 적용 — ⭐ 진짜 검증
+### Task 10: 효과 입증 — 합성 대상 실측
 
 **Files:**
-- Modify: `~/.claude/settings.json` — 플러그인 비활성
-- Delete: `~/.claude/agents/design-review-agent.md` · `~/.claude/docs/design-review-reference/`
-- Modify: `~/Projects/ICFR/icfr-backend/AGENTS.md` — 절 번호 수정 + 하네스 절 추가
-- Create: `~/Projects/ICFR/icfr-backend/harness.json` · `lib/` · `tools/` · `docs/lessons.md`
-- Modify: `~/Projects/agent-harness/README.md` — 실측을 채운다
+- Create: `proof/run.mjs`
+- Modify: `README.md` (§실측)
 
 **Interfaces:**
-- Consumes: Task 1~14 전부
-- Produces: 실측 숫자. 이것이 없으면 이 레포는 설계안일 뿐이다
+- Consumes: 설치물 전체 (Task 1~9) · `judgeJunitXml` · `hash12`
+- Produces: README §실측 의 표 · 재현 명령 `node proof/run.mjs [--claude]` — 예상과 다른 행이 하나라도 있으면 exit 1
 
-⛔ **이 태스크의 산출물은 코드가 아니라 판정이다.** 설계안 딱지가 붙은 것 중 무엇이 실제로 값을 냈는가.
+실험 — 모두 「하네스 없이」와 「있을 때」를 같은 대상·같은 조건에서 본다:
 
-- [ ] **Step 1: 사용자에게 정리 목록을 확인받는다**
+| | 무엇을 | 대조 |
+|---|---|---|
+| P1 | 거짓 완료 — test() 없는 파일 · 실패 · 수정 · 명령이 바뀌어 직전 XML 만 남음 | `npm test` 종료코드 · 남은 XML 만 읽는 판정 vs `verify` |
+| P1b | CLI 판별 | 09-28 계획의 판별식 vs `cli()` |
+| P5 | ④ 도구 — 묵은 가정 · 일기 거부 · 승격 후보 · 대장 재작업·소멸 | 설치된 배치(`.harness/tools`)에서 CLI 로 |
+| P4 | 설정 병합 · 플러그인 중복 | 기존 settings 보존 · `claude plugin list --json` |
+| P2 | 규칙 로드 (`--claude`) | `CLAUDE.md` 유무 × 규칙 위치(`AGENTS.md` vs `.claude/rules/`) · 음성 대조 |
+| P3 | ponytail 끄기 (`--claude`) | 정책 반영 대상 vs 미반영 대조군의 훅 출력 |
 
-설계서 §9 의 목록을 그대로 보여주고 승인받는다. ⛔ **승인 전에 아무것도 지우지 않는다.**
+- [x] **Step 1: 실측 스크립트를 작성한다**
 
-- [ ] **Step 2: 백업하고 정리한다**
+`proof/run.mjs`:
 
-```bash
-cp ~/.claude/settings.json ~/.claude/settings.json.before-harness
-cd ~/.claude
-# 비활성 — 삭제가 아니라 false 로 둔다. 되돌리기가 싸다
-node -e '
-const f="settings.json", s=JSON.parse(require("fs").readFileSync(f,"utf8"));
-for (const p of ["superpowers","security-guidance","claude-md-management","playwright","frontend-design","typescript-lsp"])
-  s.enabledPlugins[p+"@claude-plugins-official"]=false;
-require("fs").writeFileSync(f, JSON.stringify(s,null,2)+"\n");
-console.log("비활성:", Object.entries(s.enabledPlugins).filter(([,v])=>!v).map(([k])=>k).join(" "));
-'
+```js
+#!/usr/bin/env node
+// 효과 입증 — 합성 대상에 하네스를 얹고 「하네스 없이」와 「있을 때」를 같은 조건에서 잰다. 설계안.
+// README §실측 의 원천이다. 값이 아니라 이 명령을 남긴다.
+//   node proof/run.mjs            결정론 실측 — LLM 호출 없음
+//   node proof/run.mjs --claude   + 새 세션 실측 (claude -p --model haiku, 토큰을 쓴다)
+// 예상과 다른 행이 하나라도 있으면 exit 1.
+
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { judgeJunitXml } from '../lib/evidence.mjs';
+import { hash12 } from '../lib/mdtable.mjs';
+
+const HARNESS = fileURLToPath(new URL('..', import.meta.url));
+// tmpdir() 는 Windows 에서 8.3 단축 경로(IDEAPA~1)일 수 있다 — 대상은 긴 경로로 만들고, 단축 경로는 따로 잰다
+const LONG_TMP = realpathSync.native(tmpdir());
+const SHORT_TMP = tmpdir() !== LONG_TMP ? tmpdir() : null;
+const WITH_CLAUDE = process.argv.includes('--claude');
+const STATE = { decisions: 'docs/harness/decisions.md', lessons: 'docs/harness/lessons.md' };
+const BUILD = [{ id: '빌드', cmd: 'node -e "0"', kind: 'exit-code' }];
+const rows = [];
+const row = (exp, condition, observed, expected) => rows.push({ exp, condition, observed, expected });
+
+function sh(cmd, cwd, input = '') {
+  const r = spawnSync(cmd, { cwd, shell: true, encoding: 'utf8', input, maxBuffer: 1 << 26 });
+  return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+function put(dir, rel, body) {
+  mkdirSync(dirname(join(dir, rel)), { recursive: true });
+  writeFileSync(join(dir, rel), typeof body === 'string' ? body : `${JSON.stringify(body, null, 2)}\n`);
+}
+const first = (out, re) => (out.match(re) ?? [''])[0].trim();
+const line1 = (out) => out.trim().split(/\r?\n/)[0].slice(0, 60);
+const tool = (name) => `node .harness/tools/${name}.mjs`;
+const scratch = (name, base = LONG_TMP) => mkdtempSync(join(base, `proof-${name}-`));
+const name = (id) => id.split('@')[0];
+
+// 이 PC 의 플러그인 설치 기록 전체 — 같은 id 가 범위·프로젝트마다 한 줄씩 나온다
+function plugins(dir) {
+  const out = sh('claude plugin list --json', dir).out;
+  return JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+}
+
+// SETUP 2~4단계와 같은 배치. rulesAt 으로 규칙 위치를 바꿔 09-28 방식과 견준다
+function install(dir, checks, rulesAt = '.claude/rules/harness.md') {
+  sh('git init -q', dir);
+  mkdirSync(join(dir, '.harness'), { recursive: true });
+  mkdirSync(join(dir, '.claude', 'skills'), { recursive: true });
+  for (const d of ['lib', 'tools', 'policy']) cpSync(join(HARNESS, d), join(dir, '.harness', d), { recursive: true });
+  cpSync(join(HARNESS, 'templates', 'skills', 'final-gate'), join(dir, '.claude', 'skills', 'final-gate'), { recursive: true });
+  for (const f of ['decisions.md', 'lessons.md']) put(dir, `docs/harness/${f}`, readFileSync(join(HARNESS, 'templates', 'state', f), 'utf8'));
+  const rules = readFileSync(join(HARNESS, 'templates', 'rules', 'harness.md'), 'utf8')
+    .replaceAll('<decisions>', STATE.decisions)
+    .replaceAll('<lessons>', STATE.lessons);
+  put(dir, rulesAt, rulesAt === 'AGENTS.md' ? `# 에이전트 지시\n\n${rules}` : rules);
+  put(dir, '.harness/harness.json', { state: STATE, checks });
+  return dir;
+}
+
+// P1 — 거짓 완료: 같은 대상에서 npm test 의 종료코드와 verify 를 견준다
+function p1() {
+  const dir = scratch('node');
+  const junit = 'node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=test-results/junit.xml "test/*.test.mjs"';
+  const pkg = (test) => ({
+    name: 'proof-node',
+    private: true,
+    type: 'module',
+    scripts: { pretest: "node -e \"require('fs').mkdirSync('test-results',{recursive:true})\"", test },
+  });
+  put(dir, 'package.json', pkg(junit));
+  put(dir, 'src/sum.mjs', 'export const sum = (a, b) => a + b;\n');
+  install(dir, [{ id: '테스트', cmd: 'npm test', kind: 'junit-xml', evidence: 'test-results' }]);
+
+  const head = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { sum } from '../src/sum.mjs';\n";
+  const stage = (condition, body, npmCode, verifyCode) => {
+    put(dir, 'test/sum.test.mjs', body);
+    const npm = sh('npm test', dir);
+    const v = sh(tool('verify'), dir);
+    row('P1 거짓 완료', condition,
+      `npm test exit ${npm.code} (${first(npm.out, /ℹ pass \d+/) || '요약 없음'}) → verify exit ${v.code} · ${first(v.out, /(?<=— ).*/)}`,
+      npm.code === npmCode && v.code === verifyCode);
+  };
+  stage('테스트 파일에 test() 가 없다', "import { sum } from '../src/sum.mjs';\n// 테스트를 쓰다 말았다\n", 0, 1);
+  stage('실패하는 테스트', `${head}test('더한다', () => assert.equal(sum(1, 2), 4));\n`, 1, 1);
+  stage('고쳤다', `${head}test('더한다', () => assert.equal(sum(1, 2), 3));\n`, 0, 0);
+
+  // 테스트 명령이 아무것도 안 돌게 바뀌었다 — 직전의 통과 XML 은 남아 있다
+  put(dir, 'package.json', pkg('node -e "0"'));
+  const npm = sh('npm test', dir);
+  const naive = judgeJunitXml([readFileSync(join(dir, 'test-results', 'junit.xml'), 'utf8')]);
+  const v = sh(tool('verify'), dir);
+  row('P1 거짓 완료', '테스트 명령이 아무것도 안 돌게 바뀜 (직전 통과 XML 이 남음)',
+    `npm test exit ${npm.code} · 남은 XML 만 읽으면 ${naive.ok ? '통과' : '실패'} → verify exit ${v.code} · ${first(v.out, /(?<=— ).*/)}`,
+    npm.code === 0 && naive.ok && v.code === 1);
+}
+
+// P1b — CLI 판별: 판별이 틀리면 verify 가 아무것도 안 돌고 exit 0 이다
+function p1b() {
+  const dir = scratch('cli');
+  const lib = JSON.stringify(new URL('../lib/config.mjs', import.meta.url).href);
+  put(dir, 'old.mjs', "if (import.meta.url === `file://${process.argv[1]}`) { console.log('검사를 돌렸다'); process.exit(1); }\n");
+  put(dir, 'new.mjs', `import { cli } from ${lib};\ncli(import.meta.url, () => { console.log('검사를 돌렸다'); process.exit(1); });\n`);
+  const old = sh('node old.mjs', dir);
+  const now = sh('node new.mjs', dir);
+  const silent = old.code === 0 && !old.out.trim();
+  row('P1b CLI 판별', `09-28 계획의 판별식 (${process.platform})`, `exit ${old.code} · ${silent ? '아무것도 안 돌았다' : '돌았다'}`,
+    process.platform === 'win32' ? silent : true);
+  row('P1b CLI 판별', 'lib/config.mjs 의 cli()', `exit ${now.code} · ${now.out.includes('돌렸다') ? '돌았다' : '아무것도 안 돌았다'}`, now.code === 1);
+}
+
+// P5 — ④ 도구를 설치된 배치에서 CLI 로 돌린다
+function p5() {
+  const dir = install(scratch('state'), BUILD);
+  const ago = new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 10);
+  const decisions = readFileSync(join(dir, STATE.decisions), 'utf8')
+    .replace('YYYY-MM-DD', ago)
+    .replace('# 1. 답변이 필요합니다', '# 1. 답변이 필요합니다\n\n## Q1 · 결제 실패 시 재시도를 3회로 가정했다\n');
+  put(dir, STATE.decisions, decisions);
+  const dc = sh(tool('decision-check'), dir);
+  row('P5 가정', '20일 묵은 열린 질문 1건', `${first(dc.out, /열린 결정[^\n]*/)} · ${dc.out.includes('⚠️') ? '경고' : '경고 없음'} · exit ${dc.code}`,
+    dc.code === 0 && dc.out.includes('⚠️'));
+
+  const diary = sh(tool('lesson-append'), dir, JSON.stringify({ symptom: '배포가 실패했다', cause: '', category: '검증 부족' }));
+  row('P5 교훈', '근본 원인 없이 적기', `exit ${diary.code} · ${line1(diary.out)}`, diary.code === 1);
+  for (const symptom of ['치환이 조용히 아무것도 안 바꿨다', '생성 스크립트가 빈 파일을 썼는데 통과했다']) {
+    sh(tool('lesson-append'), dir, JSON.stringify({ symptom, cause: '실패를 알리지 않는 명령의 결과를 확인하지 않았다', category: '검증 부족' }));
+  }
+  const pr = sh(tool('lesson-promote'), dir);
+  row('P5 교훈', '같은 분류 2회 · 막는 것 없음', first(pr.out, /검증 부족 ×\d+[^\n]*/) || line1(pr.out), pr.out.includes('검증 부족 ×2'));
+
+  put(dir, 'src/engine.mjs', 'export const v = 1;\n');
+  const h = hash12(Buffer.from('export const v = 1;\n'));
+  put(dir, 'docs/harness/current.md', `| 파일 | 상태 | 해시 |\n|---|---|---|\n| \`src/engine.mjs\` | 분석완료 | \`${h}\` |\n| \`src/gone.mjs\` | 분석완료 | \`abc123abc123\` |\n`);
+  put(dir, '.harness/harness.json', { state: { ...STATE, current: 'docs/harness/current.md' }, checks: BUILD });
+  put(dir, 'src/engine.mjs', 'export const v = 2;\n');
+  const st = sh(tool('state-check'), dir);
+  row('P5 대장', '분석 뒤 원본이 바뀜 + 가리키는 파일 소멸', `${first(st.out, /대장 [^\n]*/)} · exit ${st.code}`,
+    st.code === 1 && st.out.includes('↻ src/engine.mjs'));
+}
+
+// P4 — 설정 병합과 플러그인 중복 (SETUP 5단계)
+function p4(dir) {
+  put(dir, '.claude/settings.json', { permissions: { allow: ['Bash(npm test)'] }, hooks: { Stop: [] } });
+  sh(tool('policy-apply'), dir);
+  const s = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf8'));
+  const applied = s.env?.PONYTAIL_DEFAULT_MODE === 'off' && s.enabledPlugins?.['ponytail@ponytail'] === true
+    && s.permissions.allow.includes('Bash(node .harness/tools/verify.mjs)');
+  const kept = s.permissions.allow.includes('Bash(npm test)') && Array.isArray(s.hooks?.Stop);
+  row('P4 설정 병합', '기존 settings(권한 1 · 훅) 위에 정책 반영',
+    `정책 ${applied ? '반영' : '빠짐'} · 기존 권한·훅 ${kept ? '보존' : '사라짐'}`, applied && kept);
+  if (!WITH_CLAUDE) return;
+
+  const before = plugins(dir);
+  const local = {};
+  for (const id of Object.keys(s.enabledPlugins)) {
+    if (before.some((p) => p.enabled && name(p.id) === name(id) && p.id !== id)) local[id] = false;
+  }
+  if (Object.keys(local).length) put(dir, '.claude/settings.local.json', { enabledPlugins: local });
+  const after = plugins(dir);
+  // 같은 id 가 여러 줄인 것은 설치 기록일 뿐이다 — 중복 로드는 같은 이름의 id 가 둘 이상일 때다
+  const ids = (n) => new Set(after.filter((p) => p.enabled && name(p.id) === n).map((p) => p.id)).size;
+  row('P4 플러그인', `중복 처리 뒤 (로컬에서 끈 정책 id: ${Object.keys(local).join(', ') || '없음'})`,
+    `활성 id — superpowers ${ids('superpowers')}개 · ponytail ${ids('ponytail')}개`, ids('superpowers') === 1 && ids('ponytail') === 1);
+}
+
+// 도구를 전부 끈 새 세션 — 지시 파일만 보고 답한다
+const ask = (dir, q) =>
+  sh(`claude -p --model haiku --tools "" --no-session-persistence ${JSON.stringify(`도구를 쓰지 마라. ${q} 주어진 지시에 없으면 정확히 '모름'이라고만 답하라.`)}`, dir).out.trim();
+
+// P2 — 규칙 로드: CLAUDE.md 유무 × 규칙 위치
+function p2() {
+  const claudeMd = { 'CLAUDE.md': '# 프로젝트\n\n빌드는 `npm run build`.\n' };
+  const cases = [
+    ['CLAUDE.md 있음 · 규칙을 AGENTS.md 에 (09-28 방식)', install(scratch('a'), BUILD, 'AGENTS.md'), claudeMd, false],
+    ['CLAUDE.md 없음 · 규칙을 AGENTS.md 에 (09-28 방식)', install(scratch('d'), BUILD, 'AGENTS.md'), {}, true],
+    ['CLAUDE.md 있음 · 규칙을 .claude/rules/ 에 (A안)', install(scratch('b'), BUILD), claudeMd, true],
+    ['AGENTS.md 만 있음 · 규칙을 .claude/rules/ 에 (A안)', install(scratch('c'), BUILD), { 'AGENTS.md': '# 에이전트 지시\n\n테스트는 `npm test`.\n' }, true],
+  ];
+  // 실측(2.1.287, Windows): 8.3 단축 경로로 연 세션은 AGENTS.md 를 읽지 않는다. .claude/rules/ 는 읽힌다
+  if (SHORT_TMP) {
+    cases.push(
+      ['CLAUDE.md 없음 · 규칙을 AGENTS.md 에 · 8.3 단축 경로로 연 세션', install(scratch('e', SHORT_TMP), BUILD, 'AGENTS.md'), {}, false],
+      ['CLAUDE.md 있음 · 규칙을 .claude/rules/ 에 · 8.3 단축 경로로 연 세션', install(scratch('f', SHORT_TMP), BUILD), claudeMd, true],
+    );
+  }
+  for (const [condition, dir, files, expectLoaded] of cases) {
+    for (const [rel, body] of Object.entries(files)) put(dir, rel, body);
+    const answer = ask(dir, '이 저장소에서 작업 완료를 주장하기 전에 반드시 돌려야 하는 명령은 정확히 무엇인가?');
+    const loaded = answer.includes('verify.mjs');
+    row('P2 규칙 로드', condition, loaded ? '완료 명령 → verify.mjs 를 답함' : `완료 명령 → 「${line1(answer)}」`, loaded === expectLoaded);
+  }
+  const b = cases[2][1];
+  const neg = ask(b, '이 저장소의 배포 승인권자는 누구인가?');
+  row('P2 규칙 로드', 'A안 대상 · 음성 대조 (지시에 없는 사실)', `「${line1(neg)}」`, neg.includes('모름'));
+  return { withRules: b, control: cases[3][1] };
+}
+
+// P3 — ponytail 끄기: 훅 출력은 stream-json 에 그대로 나온다
+function p3(withPolicy, control) {
+  const active = (dir) =>
+    (sh('claude -p --model haiku --tools "" --no-session-persistence --output-format stream-json --verbose "ok"', dir).out.match(/PONYTAIL MODE ACTIVE/g) ?? []).length;
+  const records = () => plugins(withPolicy).filter((p) => p.scope === 'project' && p.id === 'ponytail@ponytail').length;
+  const before = records();
+  const off = active(withPolicy); // 먼저 — off 세션은 사용자 전역 모드 플래그를 지운다
+  const after = records();
+  const on = active(control); // 대조군이 다시 켠다
+  row('P3 ponytail', '정책 반영 (env PONYTAIL_DEFAULT_MODE=off)', `훅의 PONYTAIL MODE ACTIVE ${off}회`, off === 0);
+  row('P3 ponytail', '정책 미반영 (대조군)', `훅의 PONYTAIL MODE ACTIVE ${on}회`, on > 0);
+
+  // 사용자 범위로 이미 설치된 플러그인을 프로젝트가 선언하면 세션을 열 때 프로젝트 범위 기록이 생긴다 — 실측이 남긴 것은 되돌린다
+  sh('claude plugin uninstall ponytail@ponytail --scope project --keep-data', withPolicy);
+  const cleaned = records();
+  row('P4 플러그인', '프로젝트가 선언 + 이 PC 에 사용자 범위로 이미 설치 → 세션을 연다',
+    `프로젝트 범위 설치 기록 ${before} → ${after} (실측 뒤 정리 ${cleaned})`, after === before + 1 && cleaned === before);
+}
+
+p1();
+p1b();
+p5();
+if (WITH_CLAUDE) {
+  const { withRules, control } = p2();
+  p4(withRules);
+  p3(withRules, control);
+} else {
+  p4(install(scratch('policy'), BUILD));
+}
+
+const version = (cmd) => line1(sh(cmd, HARNESS).out);
+console.log('| | |\n|---|---|');
+console.log(`| 일시 | ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC |`);
+console.log(`| 환경 | ${process.platform} · Node ${process.version}${WITH_CLAUDE ? ` · Claude Code ${version('claude --version').split(' ')[0]}` : ''} |`);
+console.log(`| 명령 | \`node proof/run.mjs${WITH_CLAUDE ? ' --claude' : ''}\` |`);
+console.log(`| 예상과 다른 행 | ${rows.filter((r) => !r.expected).length}개 / ${rows.length}행 |\n`);
+console.log('| 실험 | 조건 | 관측 | 예상대로 |\n|---|---|---|---|');
+for (const r of rows) console.log(`| ${r.exp} | ${r.condition} | ${r.observed.replace(/\|/g, '\\|')} | ${r.expected ? '✅' : '⛔'} |`);
+process.exit(rows.every((r) => r.expected) ? 0 : 1);
 ```
 
-⛔ **깨진 에이전트와 잔재는 사용자 승인 후 지운다.** `rm` 은 전역 deny 목록에 있으므로 사용자가 직접 실행하거나 명시적으로 허용해야 한다.
+- [x] **Step 2: 결정론 실측을 돌린다**
 
-- [ ] **Step 3: AGENTS.md 절 번호를 고친다**
+Run: `node proof/run.mjs`
+Expected: exit 0 — P1 4행 · P1b 2행 · P5 4행 · P4 1행이 모두 ✅
 
-현재: `## 5.` 가 레퍼런스 분석과 커밋 둘, `## 6.` 결번.
+⛔ ⛔ 이 나오면 하네스가 틀린 것인지 실험이 틀린 것인지 먼저 가른다. 하네스가 틀렸으면 해당 태스크로 돌아가 테스트부터 고친다.
+
+- [x] **Step 3: 새 세션 실측을 돌린다**
+
+Run: `node proof/run.mjs --claude > proof-result.md; echo "exit=$?"`
+Expected: exit 0 — P2 5행(Windows 에서 `tmpdir()` 가 8.3 단축 경로면 7행) · P4 플러그인 2행 · P3 2행까지 모두 ✅. 실행 시간 수 분, haiku 호출 7~9회.
+실측이 사용자 환경에 남긴 프로젝트 범위 설치 기록은 스크립트가 되돌리고 그 결과를 행으로 남긴다
+
+⚠️ P3 의 off 세션은 ponytail 의 사용자 전역 모드 플래그를 지운다. 대조군 세션이 다시 켠다.
+
+- [x] **Step 4: README §실측 을 채운다**
+
+`README.md` 의 `_적용 전 — 실측 없음._ …` 한 줄을 `proof-result.md` 의 표로 바꾸고, 표 아래에 읽는 법 세 줄을 둔다:
+무엇이 「하네스 없이」 통과였는데 「있을 때」 막혔는가, 무엇이 아직 실측되지 않았는가(실제 프로젝트 적용 · SETUP 을 새 세션이 끝까지 따르는가),
+그래서 딱지는 왜 `설계안` 그대로인가. `proof-result.md` 는 커밋하지 않는다 — 값이 아니라 명령(`node proof/run.mjs --claude`)을 남긴다.
+
+- [ ] **Step 5: 커밋한다**
 
 ```bash
-cd ~/Projects/ICFR/icfr-backend
-grep -n '^## [0-9]' AGENTS.md          # 먼저 실제 상태를 본다
+git add proof/run.mjs README.md
+git commit -m "docs: 효과 입증 — 합성 대상에서 하네스 없이와 있을 때를 잰다
+
+같은 대상·같은 조건에서 npm test 의 종료코드, 남은 XML 만 읽는 판정,
+09-28 방식의 규칙 위치를 verify·.claude/rules·정책과 견준다. 수치가
+아니라 재현 명령(node proof/run.mjs --claude)을 원천으로 남긴다.
+
+딱지는 설계안 그대로다. 합성 대상에서 메커니즘이 의도대로 판정한다는
+것까지가 실측이고, 실제 프로젝트에서 값을 냈는지는 아직 모른다."
 ```
 
-⛔ **`sed` 로 일괄 치환하지 않는다.** `AGENTS.md §4` 가 금지한 바로 그 패턴이다 — 앵커가 안 맞으면 조용히 아무것도 안 한다. 절 제목을 하나씩 확인하고 고친 뒤 다시 `grep` 으로 검증한다.
+---
 
-```bash
-node ~/Projects/agent-harness/tools/context-audit.mjs .   # ⛔ 중복·결번 0
-```
+### Task 11: 마지막 관문
 
-- [ ] **Step 4: 하네스를 얹는다**
+**Files:**
+- Create (로컬 전용): `.harness/harness.json` — `.git/info/exclude` 에 `.harness/` 를 더한다
+- Modify: `CLAUDE.local.md` (로컬 전용) · 이 계획서 체크박스
 
-`SETUP.md` 를 따른다. ICFR 의 `harness.json` 은 이렇게 된다:
+이 레포의 `CLAUDE.local.md` 가 정한 흐름 그대로 — 템플릿이 대상에 심는 `final-gate` 와 같은 순서를 이 레포 자신에 돌린다.
+
+- [x] **Step 1: 이 레포를 verify 로 판정한다**
+
+`.harness/harness.json` (로컬 전용, push 하지 않는다):
 
 ```json
-{
-  "map": "AGENTS.md",
-  "plan": "../docs/plans/2026-09-22-backend-phase1.md",
-  "state": {
-    "current": "docs/reference-audit.md",
-    "currentRoot": "~/Downloads/icfr-frontend",
-    "decisions": "Need-Check.md",
-    "lessons": "docs/lessons.md"
-  },
-  "checks": [
-    { "id": "테스트", "cmd": "./gradlew test", "kind": "junit-xml", "evidence": "build/test-results/test" },
-    { "id": "규칙커버리지", "cmd": "./gradlew specCoverage", "kind": "exit-code" },
-    { "id": "스펙스냅샷", "cmd": "./gradlew openapiSnapshot", "kind": "file-unchanged", "evidence": "docs/api/openapi.json" }
-  ]
-}
+{ "checks": [{ "id": "단위 테스트", "cmd": "npm test", "kind": "junit-xml", "evidence": "test-results" }] }
 ```
 
-- [ ] **Step 5: ⭐ LESSONS 를 소급 입력한다**
+Run: `node tools/verify.mjs; echo "exit=$?"`
+Expected: `✅ 단위 테스트 — 테스트 79 · 실패 0` · `exit=0`
 
-ICFR 에서 이미 승격된 세 건을 근거와 함께 넣는다. **`guard` 를 채워서** 넣는다 — 이미 막는 것이 있으므로 승격 후보로 다시 뜨면 안 된다.
+- [x] **Step 2: `/ponytail-review`**
 
-```bash
-cd ~/Projects/ICFR/icfr-backend
-for j in \
-'{"symptom":"sed/.replace() 로 여러 파일을 고쳤는데 아무것도 안 바뀌고 커밋됐다. 테스트 수정 두 번이 이렇게 무산됐다","cause":"앵커 문자열이 대상 파일에 없었고, 치환 실패가 오류를 내지 않는다","category":"검증 부족","guard":"AGENTS.md §4"}' \
-'{"symptom":"Flyway 마이그레이션이 예외도 경고도 없이 돌지 않았다","cause":"Spring Boot 4 가 자동설정을 기술별 모듈로 쪼갰고 모듈이 빠지면 기능이 조용히 비활성화된다","category":"누락된 컨텍스트","guard":"AGENTS.md §3 음성 케이스"}' \
-'{"symptom":"OpenAPI 스펙에서 스키마 3개가 하나로 뭉개져 계약이 거짓말을 했다","cause":"여러 도메인이 CreateBody 같은 같은 DTO 이름을 써서 springdoc 이 스키마를 합쳤다","category":"검증 부족","guard":"AGENTS.md §8"}' ; do
-  node tools/lesson-append.mjs <<< "$j"
-done
-node tools/lesson-promote.mjs    # ⛔ guard 가 있으므로 "승격 후보 없음" 이어야 한다
-```
+브랜치 diff (`main..HEAD`) 전체. 지적마다 걷어내거나 남기는 이유를 한 줄 적는다.
 
-- [ ] **Step 6: 도구 전량을 ICFR 에서 돌린다**
+실행 기록 (2026-10-02) — `net: -45 lines possible`:
 
-```bash
-cd ~/Projects/ICFR/icfr-backend
-node tools/verify.mjs          ; echo "verify exit=$?"
-node tools/state-check.mjs     ; echo "state exit=$?"
-node tools/decision-check.mjs
-node tools/context-audit.mjs
-node tools/task-extract.mjs
-node tools/trace-read.mjs
-node tools/surface-report.mjs
-node tools/policy-diff.mjs
-git status --porcelain
-```
-
-⛔ **기대값을 미리 적어둔다:**
-
-| 도구 | 기대 |
+| 지적 | 처리 |
 |---|---|
-| `verify` | exit 0 · **테스트 171 · 실패 0 · 오류 0** (실측 2026-09-28. `Need-Check.md` 의 152 는 09-23 값이라 낡았다) |
-| `state-check` | 대장 52행 · 잔량 24 (`부분분석` 13 + `미분석` 11) · 소멸 0 |
-| `decision-check` | 열린 결정 4건 (Q1~Q4) · 갱신 후 5일 초과 → **경고 나옴** |
-| `context-audit` | Step 3 이후 중복·결번 **0** |
-| `lesson-promote` | 승격 후보 **없음** (셋 다 guard 있음) |
+| `tools/policy-diff.mjs` — yagni: 부르는 곳이 SETUP 의 apply 직후 확인뿐이고 그때는 늘 깨끗하다 | **걷어냈다.** 복구는 멱등인 `policy-apply` 재실행(테스트가 멱등을 지킨다), 변경 확인은 `git diff` |
+| `test/policy.test.mjs` 의 diff 전용 테스트 2개 — delete | **걷어냈다.** 멱등 테스트 1개가 대신한다 |
+| `tools/state-check.mjs` 의 원소 1개 `Set` — shrink | **줄였다.** `r.status === '해당없음'` |
+| `lib/config.mjs` 의 `~` 확장 — yagni 후보 | **남긴다.** 커밋된 harness.json 이 팀원마다 다른 홈 아래 경로를 가리키게 하는 유일한 방법이다 |
 
-⛔ **기대와 다르면 도구가 틀린 것일 수도, ICFR 이 틀린 것일 수도 있다.** 어느 쪽인지 가른 뒤 고친다.
+- [x] **Step 3: 걷어낸 것이 있으면 다시 판정한다**
 
-- [ ] **Step 7: ⭐ 새 세션 검증**
+Run: `node tools/verify.mjs; echo "exit=$?"` 그리고 `node proof/run.mjs`
+Expected: 둘 다 exit 0
 
-```bash
-cd ~/Projects/ICFR/icfr-backend
-claude -p --model haiku "도구를 절대 쓰지 마라. 파일을 읽지도 검색하지도 마라.
-질문: 이 레포에서 완료를 주장하기 전에 무엇을 돌려야 하나? 모르면 '모름'."
+- [x] **Step 4: `/security-review` 1회**
 
-claude -p --model haiku "도구를 절대 쓰지 마라. 질문: 이 레포의 배포 승인권자는 누구인가? 모르면 '모름'."
-```
+실행 기록 (2026-10-02) — 후보 2건 → 오탐 판정 서브에이전트가 각각 판정, 확신도 8 미만은 버린다:
 
-양성은 `node tools/verify.mjs` 를 답해야 하고, 음성은 「모름」이어야 한다.
-
-- [ ] **Step 8: README 의 실측을 채운다**
-
-Step 6~7 에서 나온 **실제 숫자**를 적는다. 그리고 **설계안 딱지를 판정한다:**
-
-| 도구 | 1호에서 값을 냈나 | 딱지 |
+| 후보 | 판정 | 처리 |
 |---|---|---|
-| `verify` | | |
-| `state-check` | | |
-| `decision-check` | | |
-| `lesson-append`/`promote` | | |
-| `context-audit` | | |
-| `task-extract` | | |
-| `trace-read` | | |
-| `surface-report` | | |
-| `policy-apply`/`diff` | | |
+| `policy/settings.json` allow 의 `Bash(find *)` · `Bash(sort *)` — `find -exec` · `sort -o`/`--compress-program` 이 사람 확인 없이 실행·쓰기로 이어져 거부 목록을 우회한다 | **KEEP 8/10 · High** | allow 에서 뺐다. 같은 근본 원인인 `git diff/log/show *`(`--output=<파일>`)도 뺐고, `Bash(node .harness/tools/*)`(`../` 로 저장소의 아무 스크립트나 연다)는 읽기 전용 도구 4개의 정확한 명령으로 고정했다. 회귀 테스트가 배포 정책을 직접 지킨다 |
+| `tools/verify.mjs` 가 `harness.json` 의 cmd 를 자동 승인 경로로 실행한다 | DROP 2/10 | 저장소 내용을 통제하는 공격자는 이미 프로젝트 훅으로 더 강한 경로를 가진다. 인젝션 경로는 위 쓰기 수단에 전적으로 의존한다 |
 
-⛔ **값을 못 낸 것은 `설계안` 으로 남긴다. 억지로 승격시키지 않는다.** 값을 못 낸 이유도 적는다 — 그것이 다음 이식의 근거다.
+- [x] **Step 5: 기록하고 증거를 요약한다**
 
-- [ ] **Step 9: 양쪽을 커밋한다**
-
-```bash
-cd ~/Projects/ICFR/icfr-backend
-git add AGENTS.md harness.json lib/ tools/ docs/lessons.md .claude/skills/
-git commit -m "feat: agent-harness 를 얹고 AGENTS.md 절 번호를 고친다
-
-<실제로 무엇이 바뀌었고 무엇이 검증됐는지>"
-
-cd ~/Projects/agent-harness
-git add README.md
-git commit -m "docs: ICFR 1호 적용 실측
-
-<실제 숫자와 딱지 판정>"
-```
-
-⛔ ICFR 레포는 **한글 커밋 · `Co-Authored-By` 없음** 이다 (`AGENTS.md §5`). ⛔ **push 하지 않는다.**
+계획서 체크박스를 채운다. 걷어낸 것이 있으면 커밋한다 (`fix:` 또는 `refactor:`). 증거 요약은 verify · proof 출력 그대로 옮긴다.
+⛔ push 하지 않는다 — 통합(merge · PR)은 사용자가 정한다.
 
 ---
 
 # 자체 검토
 
-**1. 스펙 커버리지** — 설계서 §4 의 6역할 전부에 태스크가 있다.
+**1. 스펙 커버리지**
 
 | 설계서 | 태스크 |
 |---|---|
-| ① 계약 | Task 11 + `templates/plan.skeleton.md` |
-| ② 컨텍스트 | Task 12 + `templates/AGENTS.snippet.md` (Task 14) |
-| ③ 게이트웨이 | Task 9 (정책) · Task 10 (노출 면적) |
-| ④ STATE | Task 5 |
-| ④ DECISIONS | Task 6 |
-| ④ LESSONS | Task 7 · Task 8 |
-| ⑤ 증거 | Task 2 · Task 3 · Task 4 |
-| ⑥ 트레이스 | Task 13 |
-| §5 디렉터리 | Task 1 (`harness.schema.json`) · Task 14 (`templates/`) |
-| §7 검증 방법 | Task 14 `SETUP.md §6` · Task 15 Step 7 |
-| §8 도입 금지 | Task 14 `README.md` |
-| §9 1호 적용 | Task 15 |
+| §0 superpowers 베이스 · final-gate ponytail · security 1회 | Task 9 (규칙 · final-gate) · Task 8 (env off) |
+| §2 규칙 위치 `.claude/rules/` | Task 9 · Task 10 P2 |
+| §3 정직한 값 · Node 실측 | Task 2 · Task 3 · Task 10 P1 |
+| §4 흐름 | Task 9 (규칙 · final-gate · README) |
+| §5 구성 요소 · 뺀 것 | Task 1~9 (뺀 것은 만들지 않는다) |
+| §6 설치 배치 · 플러그인 · 중복 · 신규/기존 | Task 9 SETUP · Task 8 · Task 10 P4 |
+| §7 원칙 (OS 무관 · 덮어쓰지 않음) | Task 1 `cli()` · Task 3 `exec` · Task 4 해시 · Task 8 병합 |
+| §8 검증 4가지 | Task 9 SETUP 7단계 · Task 10 P2·P3·P4 |
+| §9 도입 금지 | Task 9 README |
+| §10 graphify · 도메인 지식 | 범위 밖 — 만들지 않는다 |
 
-**2. 플레이스홀더** — 모든 코드 단계에 실제 코드가 있다. `<…>` 는 **템플릿 파일 안**에만 있고, 그것은 SETUP 이 대상별로 채우도록 설계된 자리다 (설계서 §5 와 일치).
+**2. 플레이스홀더** — `<…>` 는 템플릿과 SETUP 의 자리표시뿐이고, SETUP 4단계가 채우며 `grep` 으로 확인한다. Task 10 Step 4 의 README 표는 실측 값이라 계획에 미리 적지 않는다.
 
 **3. 타입 일관성**
 
 | 이름 | 정의 | 사용 |
 |---|---|---|
-| `loadConfig(root)` | Task 1 | Task 3·5·6·7·8·11·12 |
-| `cfg.state.currentRoot` | Task 5 (config 확장) | Task 5 |
-| `judgeJunitXml(contents)` | Task 2 | Task 3 |
-| `parseAuditRows(text)` / `hash12(bytes)` | Task 5 | Task 5 |
-| `CATEGORIES` | Task 7 | Task 8 (문자열 대조) · Task 14 스니펫 |
-| `'⛔ 아직 없다'` (guard 기본값) | Task 7 | Task 8 `NO_GUARD` · Task 15 Step 5 |
-| `mergePermissions` / `diffPermissions` | Task 9 | Task 9 |
-| `loadPolicy` / `settingsPath` | Task 9 `policy-apply` | Task 9 `policy-diff` 가 import |
+| `loadConfig(root)` · `cli(url, main)` | Task 1 | Task 3~8 |
+| `judgeJunitXml(contents)` | Task 2 | Task 3 · Task 10 |
+| `cells(line)` · `parseAuditRows` · `hash12` | Task 4 | Task 4 · Task 6 테스트 · Task 7 · Task 10 |
+| `appendLesson` · `NO_GUARD` · `CATEGORIES` | Task 6 | Task 7 |
+| `mergeSettings` · `POLICY` · `readJson` | Task 8 | Task 8 |
+| `target` · `put` · `fixture` · `repoFile` | Task 1 | Task 2~9 테스트 |
 
-⚠️ **경로 하나가 어긋난다** — `checks/verify.mjs` 는 레포에서 `checks/` 에 있지만 SETUP 은 대상의 `tools/` 로 복사한다. 그래서 대상에서는 `node tools/verify.mjs` 다. `verify.mjs` 의 `import { loadConfig } from '../lib/config.mjs'` 는 양쪽 모두에서 성립한다 (`checks/` 와 `tools/` 둘 다 루트 한 단계 아래). ⛔ **Task 15 Step 6 에서 실제로 확인한다.**
-
-# 남은 미결 — 사용자 답변 대기
-
-계획 실행을 막지 않는다. Task 15 전에 정해지면 반영한다.
-
-1. `icms-control/CLAUDE.md` — `AGENTS.md` 전문 복사본 + 동기화 규칙. 정리 범위에 넣을지
-2. 커밋 트레일러 — `agent-harness` 에 `Co-Authored-By` 를 넣을지 (`context-graph` 0건 / `agent-init-template` 10건으로 갈림)
-3. `ICFR/docs` 버전 관리 — 설계서 §10 에 발견 사항으로만 남아 있다
+**4. 테스트 수** — 10 + 10 + 11 + 12 + 8 + 8 + 7 + 8 + 5 = **79**. Task 9 Step 8 · Task 11 Step 1 의 기대값이다.
