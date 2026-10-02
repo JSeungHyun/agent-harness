@@ -1,0 +1,15 @@
+{
+  "_note": "agent-harness 경로 설정. 모든 경로는 대상 저장소 루트 기준. 없는 상태 파일은 키를 지운다. 형식은 SETUP.md 3단계.",
+  "state": {
+    "decisions": "docs/harness/decisions.md",
+    "lessons": "docs/harness/lessons.md"
+  },
+  "checks": [
+    {
+      "id": "테스트",
+      "cmd": "<결과 XML 을 매번 새로 쓰는 테스트 명령>",
+      "kind": "junit-xml",
+      "evidence": "<결과 XML 파일 또는 디렉터리>"
+    }
+  ]
+}
